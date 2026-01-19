@@ -46,13 +46,49 @@ export function translateToOpenAI(
   }
 }
 
+// Exact model name mappings
+const MODEL_NAME_MAP: Record<string, string> = {
+  haiku: "claude-haiku-4.5",
+  sonnet: "claude-sonnet-4",
+  opus: "claude-opus-4.5",
+  "claude-opus-4": "claude-opus-4.5",
+  "claude-haiku-4": "claude-haiku-4.5",
+}
+
+// Pattern-based model mappings: [pattern, target]
+const MODEL_PATTERN_MAP: Array<[string, string]> = [
+  // Claude 3.5 models (older naming convention)
+  ["claude-3-5-sonnet", "claude-sonnet-4"],
+  ["claude-3.5-sonnet", "claude-sonnet-4"],
+  ["claude-3-5-haiku", "claude-haiku-4.5"],
+  ["claude-3.5-haiku", "claude-haiku-4.5"],
+  ["claude-3-opus", "claude-opus-4.5"],
+  ["claude-3.0-opus", "claude-opus-4.5"],
+  // Claude 4.x models with version suffixes (e.g., claude-sonnet-4-20241022)
+  ["claude-sonnet-4-", "claude-sonnet-4"],
+  ["claude-sonnet-4.", "claude-sonnet-4"],
+  ["claude-opus-4-", "claude-opus-4.5"],
+  ["claude-opus-4.", "claude-opus-4.5"],
+  ["claude-haiku-4-", "claude-haiku-4.5"],
+  ["claude-haiku-4.", "claude-haiku-4.5"],
+]
+
 function translateModelName(model: string): string {
-  // Subagent requests use a specific model number which Copilot doesn't support
-  if (model.startsWith("claude-sonnet-4-")) {
-    return model.replace(/^claude-sonnet-4-.*/, "claude-sonnet-4")
-  } else if (model.startsWith("claude-opus-")) {
-    return model.replace(/^claude-opus-4-.*/, "claude-opus-4")
+  // Claude Code uses Anthropic model IDs, but GitHub Copilot uses different naming
+  // Map common Claude Code model names to GitHub Copilot equivalents
+
+  // Check exact matches first
+  if (MODEL_NAME_MAP[model]) {
+    return MODEL_NAME_MAP[model]
   }
+
+  // Check pattern-based matches
+  for (const [pattern, target] of MODEL_PATTERN_MAP) {
+    if (model.includes(pattern)) {
+      return target
+    }
+  }
+
   return model
 }
 
