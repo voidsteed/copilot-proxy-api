@@ -31,7 +31,8 @@ A reverse-engineered proxy for the GitHub Copilot API that exposes it as an Open
 
 ## Features
 
-- **OpenAI & Anthropic Compatibility**: Exposes GitHub Copilot as an OpenAI-compatible (`/v1/chat/completions`, `/v1/models`, `/v1/embeddings`) and Anthropic-compatible (`/v1/messages`) API.
+- **OpenAI & Anthropic Compatibility**: Exposes GitHub Copilot as an OpenAI-compatible (`/v1/chat/completions`, `/v1/responses`, `/v1/models`, `/v1/embeddings`) and Anthropic-compatible (`/v1/messages`) API.
+- **Codex CLI Integration**: Use with [OpenAI Codex CLI](https://github.com/openai/codex) via the Responses API endpoint.
 - **Claude Code Integration**: Easily configure and launch [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) to use Copilot as its backend with a simple command-line flag (`--claude-code`).
 - **Usage Dashboard**: A web-based dashboard to monitor your Copilot API usage, view quotas, and see detailed statistics.
 - **Rate Limit Control**: Manage API usage with rate-limiting options (`--rate-limit`) and a waiting mechanism (`--wait`) to prevent errors from rapid requests.
@@ -188,6 +189,7 @@ These endpoints mimic the OpenAI API structure.
 | Endpoint                    | Method | Description                                               |
 | --------------------------- | ------ | --------------------------------------------------------- |
 | `POST /v1/chat/completions` | `POST` | Creates a model response for the given chat conversation. |
+| `POST /v1/responses`        | `POST` | OpenAI Responses API for newer models (e.g., gpt-5.x).    |
 | `GET /v1/models`            | `GET`  | Lists the currently available models.                     |
 | `POST /v1/embeddings`       | `POST` | Creates an embedding vector representing the input text.  |
 
@@ -325,6 +327,45 @@ Here is an example `.claude/settings.json` file:
 You can find more options here: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables)
 
 You can also read more about IDE integration here: [Add Claude Code to your IDE](https://docs.anthropic.com/en/docs/claude-code/ide-integrations)
+
+## Using with Codex CLI
+
+This proxy supports the [OpenAI Codex CLI](https://github.com/openai/codex) through the Responses API endpoint (`/v1/responses`).
+
+### Configuration
+
+Add the following to your `~/.codex/config.toml`:
+
+```toml
+model = "gpt-5.2"
+model_provider = "copilot-proxy"
+
+[model_providers.copilot-proxy]
+name = "GitHub Copilot (via copilot-api)"
+base_url = "http://localhost:4141/v1"
+wire_api = "responses"
+env_key = "OPENAI_API_KEY"
+```
+
+Then set the environment variable (the value doesn't matter, it just needs to be set):
+
+```sh
+# Windows (permanent)
+setx OPENAI_API_KEY "dummy"
+
+# Linux/macOS
+export OPENAI_API_KEY="dummy"
+```
+
+Start the proxy server and run Codex:
+
+```sh
+# Start the proxy
+npx copilot-api@latest start
+
+# In another terminal, run Codex
+codex
+```
 
 ## Running from Source
 
