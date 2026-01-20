@@ -17,8 +17,6 @@
 >
 > Use this proxy responsibly to avoid account restrictions.
 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/E1E519XS7W)
-
 ---
 
 **Note:** If you are using [opencode](https://github.com/sst/opencode), you do not need this project. Opencode supports GitHub Copilot provider out of the box.
@@ -63,7 +61,7 @@ bun install
 Build image
 
 ```sh
-docker build -t copilot-api .
+docker build -t copilot-proxy-api .
 ```
 
 Run the container
@@ -75,11 +73,11 @@ mkdir -p ./copilot-data
 # Run the container with a bind mount to persist the token
 # This ensures your authentication survives container restarts
 
-docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/copilot-api copilot-api
+docker run -p 4141:4141 -v $(pwd)/copilot-data:/root/.local/share/copilot-proxy-api copilot-proxy-api
 ```
 
 > **Note:**
-> The GitHub token and related data will be stored in `copilot-data` on your host. This is mapped to `/root/.local/share/copilot-api` inside the container, ensuring persistence across restarts.
+> The GitHub token and related data will be stored in `copilot-data` on your host. This is mapped to `/root/.local/share/copilot-proxy-api` inside the container, ensuring persistence across restarts.
 
 ### Docker with Environment Variables
 
@@ -87,13 +85,13 @@ You can pass the GitHub token directly to the container using environment variab
 
 ```sh
 # Build with GitHub token
-docker build --build-arg GH_TOKEN=your_github_token_here -t copilot-api .
+docker build --build-arg GH_TOKEN=your_github_token_here -t copilot-proxy-api .
 
 # Run with GitHub token
-docker run -p 4141:4141 -e GH_TOKEN=your_github_token_here copilot-api
+docker run -p 4141:4141 -e GH_TOKEN=your_github_token_here copilot-proxy-api
 
 # Run with additional options
-docker run -p 4141:4141 -e GH_TOKEN=your_token copilot-api start --verbose --port 4141
+docker run -p 4141:4141 -e GH_TOKEN=your_token copilot-proxy-api start --verbose --port 4141
 ```
 
 ### Docker Compose Example
@@ -101,7 +99,7 @@ docker run -p 4141:4141 -e GH_TOKEN=your_token copilot-api start --verbose --por
 ```yaml
 version: "3.8"
 services:
-  copilot-api:
+  copilot-proxy-api:
     build: .
     ports:
       - "4141:4141"
@@ -122,19 +120,19 @@ The Docker image includes:
 You can run the project directly using npx:
 
 ```sh
-npx copilot-api@latest start
+npx copilot-proxy-api@latest start
 ```
 
 With options:
 
 ```sh
-npx copilot-api@latest start --port 8080
+npx copilot-proxy-api@latest start --port 8080
 ```
 
 For authentication only:
 
 ```sh
-npx copilot-api@latest auth
+npx copilot-proxy-api@latest auth
 ```
 
 ## Command Structure
@@ -217,46 +215,46 @@ Using with npx:
 
 ```sh
 # Basic usage with start command
-npx copilot-api@latest start
+npx copilot-proxy-api@latest start
 
 # Run on custom port with verbose logging
-npx copilot-api@latest start --port 8080 --verbose
+npx copilot-proxy-api@latest start --port 8080 --verbose
 
 # Use with a business plan GitHub account
-npx copilot-api@latest start --account-type business
+npx copilot-proxy-api@latest start --account-type business
 
 # Use with an enterprise plan GitHub account
-npx copilot-api@latest start --account-type enterprise
+npx copilot-proxy-api@latest start --account-type enterprise
 
 # Enable manual approval for each request
-npx copilot-api@latest start --manual
+npx copilot-proxy-api@latest start --manual
 
 # Set rate limit to 30 seconds between requests
-npx copilot-api@latest start --rate-limit 30
+npx copilot-proxy-api@latest start --rate-limit 30
 
 # Wait instead of error when rate limit is hit
-npx copilot-api@latest start --rate-limit 30 --wait
+npx copilot-proxy-api@latest start --rate-limit 30 --wait
 
 # Provide GitHub token directly
-npx copilot-api@latest start --github-token ghp_YOUR_TOKEN_HERE
+npx copilot-proxy-api@latest start --github-token ghp_YOUR_TOKEN_HERE
 
 # Run only the auth flow
-npx copilot-api@latest auth
+npx copilot-proxy-api@latest auth
 
 # Run auth flow with verbose logging
-npx copilot-api@latest auth --verbose
+npx copilot-proxy-api@latest auth --verbose
 
 # Show your Copilot usage/quota in the terminal (no server needed)
-npx copilot-api@latest check-usage
+npx copilot-proxy-api@latest check-usage
 
 # Display debug information for troubleshooting
-npx copilot-api@latest debug
+npx copilot-proxy-api@latest debug
 
 # Display debug information in JSON format
-npx copilot-api@latest debug --json
+npx copilot-proxy-api@latest debug --json
 
 # Initialize proxy from environment variables (HTTP_PROXY, HTTPS_PROXY, etc.)
-npx copilot-api@latest start --proxy-env
+npx copilot-proxy-api@latest start --proxy-env
 ```
 
 ## Using the Usage Viewer
@@ -265,7 +263,7 @@ After starting the server, a URL to the Copilot Usage Dashboard will be displaye
 
 1.  Start the server. For example, using npx:
     ```sh
-    npx copilot-api@latest start
+    npx copilot-proxy-api@latest start
     ```
 2.  The server will output a URL to the usage viewer. Copy and paste this URL into your browser. It will look something like this:
     `https://ericc-ch.github.io/copilot-api?endpoint=http://localhost:4141/usage`
@@ -291,7 +289,7 @@ There are two ways to configure Claude Code to use this proxy:
 To get started, run the `start` command with the `--claude-code` flag:
 
 ```sh
-npx copilot-api@latest start --claude-code
+npx copilot-proxy-api@latest start --claude-code
 ```
 
 You will be prompted to select a primary model and a "small, fast" model for background tasks. After selecting the models, a command will be copied to your clipboard. This command sets the necessary environment variables for Claude Code to use the proxy.
@@ -341,7 +339,7 @@ model = "gpt-5.2"
 model_provider = "copilot-proxy"
 
 [model_providers.copilot-proxy]
-name = "GitHub Copilot (via copilot-api)"
+name = "GitHub Copilot (via copilot-proxy-api)"
 base_url = "http://localhost:4141/v1"
 wire_api = "responses"
 env_key = "OPENAI_API_KEY"
@@ -361,7 +359,7 @@ Start the proxy server and run Codex:
 
 ```sh
 # Start the proxy
-npx copilot-api@latest start
+npx copilot-proxy-api@latest start
 
 # In another terminal, run Codex
 codex
@@ -387,6 +385,6 @@ bun run start
 
 - To avoid hitting GitHub Copilot's rate limits, you can use the following flags:
   - `--manual`: Enables manual approval for each request, giving you full control over when requests are sent.
-  - `--rate-limit <seconds>`: Enforces a minimum time interval between requests. For example, `copilot-api start --rate-limit 30` will ensure there's at least a 30-second gap between requests.
+  - `--rate-limit <seconds>`: Enforces a minimum time interval between requests. For example, `copilot-proxy-api start --rate-limit 30` will ensure there's at least a 30-second gap between requests.
   - `--wait`: Use this with `--rate-limit`. It makes the server wait for the cooldown period to end instead of rejecting the request with an error. This is useful for clients that don't automatically retry on rate limit errors.
 - If you have a GitHub business or enterprise plan account with Copilot, use the `--account-type` flag (e.g., `--account-type business`). See the [official documentation](https://docs.github.com/en/enterprise-cloud@latest/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-access-to-github-copilot-in-your-organization/managing-github-copilot-access-to-your-organizations-network#configuring-copilot-subscription-based-network-routing-for-your-enterprise-or-organization) for more details.
