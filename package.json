@@ -1,6 +1,6 @@
 {
   "name": "copilot-proxy-api",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Turn GitHub Copilot into OpenAI/Anthropic API compatible server. Usable with Claude Code and Codex CLI!",
   "keywords": [
     "proxy",
@@ -10,11 +10,11 @@
     "codex",
     "claude-code"
   ],
-  "homepage": "https://github.com/voidsteed/copilot-api",
-  "bugs": "https://github.com/voidsteed/copilot-api/issues",
+  "homepage": "https://github.com/voidsteed/copilot-proxy-api",
+  "bugs": "https://github.com/voidsteed/copilot-proxy-api/issues",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/voidsteed/copilot-api.git"
+    "url": "git+https://github.com/voidsteed/copilot-proxy-api.git"
   },
   "author": "Erick Christian <erickchristian48@gmail.com>",
   "type": "module",
