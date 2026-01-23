@@ -81,7 +81,7 @@ async function getDebugInfo(): Promise<DebugInfo> {
 }
 
 function printDebugInfoPlain(info: DebugInfo): void {
-  consola.info(`copilot-api debug
+  consola.info(`copilot-proxy-api debug
 
 Version: ${info.version}
 Runtime: ${info.runtime.name} ${info.runtime.version} (${info.runtime.platform} ${info.runtime.arch})

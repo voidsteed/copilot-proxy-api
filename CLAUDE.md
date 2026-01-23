@@ -1,3 +1,8 @@
+---
+description: 
+alwaysApply: true
+---
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
@@ -151,10 +156,10 @@ Tests use `bun:test` and focus on translation logic validation:
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│    User      │     │  copilot-api │     │   GitHub     │     │ Copilot API  │
+│    User      │     │copilot-proxy-api│   │   GitHub     │     │ Copilot API  │
 └──────┬───────┘     └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
        │                    │                    │                    │
-       │  copilot-api auth  │                    │                    │
+       │copilot-proxy-api auth│                   │                    │
        │───────────────────>│                    │                    │
        │                    │                    │                    │
        │                    │ POST /login/device/code                 │
@@ -176,7 +181,7 @@ Tests use `bun:test` and focus on translation logic validation:
        │                    │ {access_token}     │                    │
        │                    │<───────────────────│                    │
        │                    │                    │                    │
-       │                    │ Save to ~/.local/share/copilot-api/github_token
+       │                    │ Save to ~/.local/share/copilot-proxy-api/github_token
        │                    │                    │                    │
        │                    │ GET /copilot_internal/v2/token          │
        │                    │───────────────────>│                    │
