@@ -107,6 +107,22 @@ function translateAnthropicMessagesToOpenAI(
   return [...systemMessages, ...otherMessages]
 }
 
+// Reserved keywords that GitHub Copilot API blocks in system prompts
+// These will be completely removed from system prompts
+const RESERVED_KEYWORDS = [
+  "x-anthropic-billing-header",
+  "anthropic-billing-header",
+  "x-anthropic-",
+]
+
+function sanitizeSystemPrompt(text: string): string {
+  let sanitized = text
+  for (const keyword of RESERVED_KEYWORDS) {
+    sanitized = sanitized.replaceAll(keyword, "")
+  }
+  return sanitized
+}
+
 function handleSystemPrompt(
   system: string | Array<AnthropicTextBlock> | undefined,
 ): Array<Message> {
@@ -115,10 +131,10 @@ function handleSystemPrompt(
   }
 
   if (typeof system === "string") {
-    return [{ role: "system", content: system }]
+    return [{ role: "system", content: sanitizeSystemPrompt(system) }]
   } else {
     const systemText = system.map((block) => block.text).join("\n\n")
-    return [{ role: "system", content: systemText }]
+    return [{ role: "system", content: sanitizeSystemPrompt(systemText) }]
   }
 }
 
@@ -244,7 +260,10 @@ function mapContent(
         break
       }
       case "thinking": {
-        contentParts.push({ type: "text", text: block.thinking })
+        contentParts.push({
+          type: "text",
+          text: block.thinking,
+        })
 
         break
       }
