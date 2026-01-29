@@ -26,19 +26,40 @@ export const setupCopilotToken = async () => {
   }
 
   const refreshInterval = (refresh_in - 60) * 1000
-  setInterval(async () => {
-    consola.debug("Refreshing Copilot token")
-    try {
-      const { token } = await getCopilotToken()
-      state.copilotToken = token
-      consola.debug("Copilot token refreshed")
-      if (state.showToken) {
-        consola.info("Refreshed Copilot token:", token)
+
+  const refreshWithRetry = async (maxRetries = 5, baseDelay = 1000) => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const { token } = await getCopilotToken()
+        state.copilotToken = token
+        consola.debug("Copilot token refreshed")
+        if (state.showToken) {
+          consola.info("Refreshed Copilot token:", token)
+        }
+        return // Success, exit retry loop
+      } catch (error) {
+        consola.error(
+          `Failed to refresh Copilot token (attempt ${attempt}/${maxRetries}):`,
+          error,
+        )
+
+        if (attempt < maxRetries) {
+          const delay = baseDelay * Math.pow(2, attempt - 1) // Exponential backoff
+          consola.info(`Retrying in ${delay / 1000} seconds...`)
+          await new Promise((resolve) => setTimeout(resolve, delay))
+        } else {
+          consola.error(
+            "Max retries reached. Token refresh failed, but keeping server alive.",
+          )
+          // Don't throw - keep the server running with the old token
+        }
       }
-    } catch (error) {
-      consola.error("Failed to refresh Copilot token:", error)
-      throw error
     }
+  }
+
+  setInterval(() => {
+    consola.debug("Refreshing Copilot token")
+    void refreshWithRetry()
   }, refreshInterval)
 }
 
