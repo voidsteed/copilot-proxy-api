@@ -1,8 +1,8 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
-import { logger } from "hono/logger"
 
 import { optionalLocalAuth } from "./lib/local-auth"
+import { requestLogMiddleware } from "./lib/request-log"
 import { requestTraceMiddleware } from "./lib/request-trace"
 import { completionRoutes } from "./routes/chat-completions/route"
 import { debugRoutes } from "./routes/debug/route"
@@ -15,7 +15,7 @@ import { usageRoute } from "./routes/usage/route"
 
 export const server = new Hono()
 
-server.use(logger())
+server.use(requestLogMiddleware)
 server.use(cors())
 server.use(requestTraceMiddleware)
 

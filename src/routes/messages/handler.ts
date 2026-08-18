@@ -15,6 +15,7 @@ import {
 import { HTTPError } from "~/lib/error"
 import { createPromptTooLongError } from "~/lib/prompt-too-long"
 import { checkRateLimit } from "~/lib/rate-limit"
+import { setRequestLogMetadata } from "~/lib/request-log"
 import { state } from "~/lib/state"
 import {
   createChatCompletions,
@@ -102,6 +103,11 @@ export async function handleCompletion(c: Context) {
   // Async preprocessing: PDF document block extraction, etc.
   const preprocessed = await preprocessAnthropicPayload(anthropicPayload)
   const openAIPayload = translateToOpenAI(preprocessed)
+  setRequestLogMetadata(c, {
+    model: openAIPayload.model,
+    effort:
+      openAIPayload.reasoning_effort ?? preprocessed.output_config?.effort,
+  })
   const model = state.models?.data.find((m) => m.id === openAIPayload.model)
 
   if (shouldUseResponsesForMessages(model)) {
