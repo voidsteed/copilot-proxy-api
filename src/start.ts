@@ -68,7 +68,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   await setupCopilotToken()
   await cacheModels()
 
-  consola.info(
+  consola.debug(
     `Available models: \n${state.models?.data.map((model) => `- ${model.id}`).join("\n")}`,
   )
 
@@ -118,7 +118,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
     }
   }
 
-  consola.box(
+  consola.debug(
     `🌐 Usage Viewer: https://voidsteed.github.io/copilot-proxy-api/dashboard.html?endpoint=${serverUrl}/usage`,
   )
 
@@ -132,6 +132,10 @@ export async function runServer(options: RunServerOptions): Promise<void> {
     // as "API Error: The socket connection was closed unexpectedly".
     bun: { idleTimeout: 0 },
   })
+
+  consola.success(
+    `Ready — ${state.models?.data.length ?? 0} models available. Point your client at ${serverUrl}`,
+  )
 }
 
 export const start = defineCommand({

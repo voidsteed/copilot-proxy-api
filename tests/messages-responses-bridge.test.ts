@@ -12,6 +12,27 @@ state.copilotToken = "test-token"
 state.vsCodeVersion = "1.0.0"
 state.accountType = "individual"
 
+const notebookToolSchema = {
+  type: "object",
+  properties: {
+    action: { type: "string" },
+    notebookUri: { type: "string" },
+  },
+  required: ["action", "notebookUri"],
+}
+
+const anthropicNotebookTool = {
+  name: "fabric_notebook_content",
+  input_schema: notebookToolSchema,
+}
+
+const responsesNotebookTool = {
+  type: "function",
+  name: "fabric_notebook_content",
+  strict: false,
+  parameters: notebookToolSchema,
+}
+
 afterEach(() => {
   mock.restore()
   state.models = undefined
@@ -186,8 +207,9 @@ describe("Messages Responses bridge", () => {
       expect(JSON.parse(opts.body as string)).toMatchObject({
         model: "gpt-5.5",
         input: [{ role: "user", content: "hello" }],
-        max_output_tokens: 100,
+        max_output_tokens: 16,
         stream: false,
+        tools: [responsesNotebookTool],
       })
 
       return new Response(
@@ -206,7 +228,12 @@ describe("Messages Responses bridge", () => {
             },
           ],
           output_text: "bridged",
-          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          usage: {
+            input_tokens: 10,
+            output_tokens: 1,
+            total_tokens: 11,
+            input_tokens_details: { cached_tokens: 4 },
+          },
           status: "completed",
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -218,8 +245,9 @@ describe("Messages Responses bridge", () => {
       method: "POST",
       body: JSON.stringify({
         model: "gpt-5.5",
-        max_tokens: 100,
+        max_tokens: 1,
         messages: [{ role: "user", content: "hello" }],
+        tools: [anthropicNotebookTool],
       }),
       headers: { "content-type": "application/json" },
     })
@@ -230,6 +258,11 @@ describe("Messages Responses bridge", () => {
       model: "gpt-5.5",
       content: [{ type: "text", text: "bridged" }],
       stop_reason: "end_turn",
+      usage: {
+        input_tokens: 6,
+        output_tokens: 1,
+        cache_read_input_tokens: 4,
+      },
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
