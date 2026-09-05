@@ -644,13 +644,17 @@ function isContextOverflow(
 function sanitizeResponsesPayload(
   payload: ResponsesApiRequest,
 ): ResponsesApiRequest {
-  const sanitized = normalizeToolDescriptions(
+  let sanitized = normalizeToolDescriptions(
     sanitizeInvalidOutputImages(payload),
   )
 
   // Codex sends ChatGPT-only fast mode metadata; Copilot Responses rejects it.
   delete (sanitized as ResponsesApiRequest & { service_tier?: unknown })
     .service_tier
+
+  if (sanitized.model === "gpt-6-astra") {
+    sanitized = sanitizeGpt6AstraPayload(sanitized)
+  }
 
   if (!sanitized.tools?.some((tool) => tool.type === "image_generation")) {
     return sanitized
@@ -660,6 +664,25 @@ function sanitizeResponsesPayload(
     ...sanitized,
     tools: sanitized.tools.filter((tool) => tool.type !== "image_generation"),
   }
+}
+
+function sanitizeGpt6AstraPayload(
+  payload: ResponsesApiRequest,
+): ResponsesApiRequest {
+  const sanitized = { ...payload }
+  delete sanitized.temperature
+  delete sanitized.top_p
+  delete (sanitized as ResponsesApiRequest & { top_logprobs?: unknown })
+    .top_logprobs
+  delete (sanitized as ResponsesApiRequest & { logprobs?: unknown }).logprobs
+
+  if (sanitized.include?.includes("message.output_text.logprobs")) {
+    sanitized.include = sanitized.include.filter(
+      (item) => item !== "message.output_text.logprobs",
+    )
+  }
+
+  return sanitized
 }
 
 function normalizeToolDescriptions(

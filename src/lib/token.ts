@@ -9,6 +9,7 @@ import { pollAccessToken } from "~/services/github/poll-access-token"
 
 import { HTTPError } from "./error"
 import { state } from "./state"
+import { sleep } from "./utils"
 
 const readGithubToken = () => fs.readFile(PATHS.GITHUB_TOKEN_PATH, "utf8")
 
@@ -16,6 +17,36 @@ const writeGithubToken = (token: string) =>
   fs.writeFile(PATHS.GITHUB_TOKEN_PATH, token)
 
 let copilotTokenRefresh: Promise<string> | undefined
+
+export async function getCopilotTokenWithRetry(
+  attempts = 3,
+  retryDelayMs = 1000,
+) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await getCopilotToken()
+    } catch (error) {
+      if (attempt === attempts || !isTransientTokenError(error)) throw error
+
+      consola.warn(
+        `Failed to get Copilot token; retrying (${attempt}/${attempts})`,
+      )
+      await sleep(retryDelayMs * attempt)
+    }
+  }
+
+  throw new Error("Failed to get Copilot token")
+}
+
+function isTransientTokenError(error: unknown): boolean {
+  if (!(error instanceof HTTPError)) return true
+
+  return (
+    error.response.status === 408
+    || error.response.status === 429
+    || error.response.status >= 500
+  )
+}
 
 export function refreshCopilotToken(staleToken?: string): Promise<string> {
   if (staleToken && state.copilotToken && state.copilotToken !== staleToken) {
@@ -39,7 +70,7 @@ export function refreshCopilotToken(staleToken?: string): Promise<string> {
 }
 
 export const setupCopilotToken = async () => {
-  const { token, refresh_in } = await getCopilotToken()
+  const { token, refresh_in } = await getCopilotTokenWithRetry()
   state.copilotToken = token
 
   // Display the Copilot token to the screen
@@ -128,7 +159,14 @@ export async function setupGitHubToken(
   }
 }
 
-async function logUser() {
-  const user = await getGitHubUser()
-  consola.info(`Logged in as ${user.login}`)
+export async function logUser() {
+  try {
+    const user = await getGitHubUser()
+    consola.info(`Logged in as ${user.login}`)
+  } catch (error) {
+    consola.warn(
+      "Failed to get GitHub user; continuing with the saved token",
+      error,
+    )
+  }
 }

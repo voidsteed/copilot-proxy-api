@@ -638,6 +638,99 @@ test("fills required tool descriptions in Responses input history", async () => 
   expect(tools[4].description).toBe("Tool blank_history_description")
 })
 
+test("removes unsupported GPT-6 Astra sampling and logprob parameters", async () => {
+  const payload = {
+    model: "gpt-6-astra",
+    input: "Say hello",
+    temperature: 0.2,
+    top_p: 0.9,
+    top_logprobs: 5,
+    logprobs: true,
+    include: ["message.output_text.logprobs", "reasoning.encrypted_content"],
+  } as ResponsesApiRequest
+
+  const fetchMock = mock((_url: string, opts: RequestInit) => {
+    const forwarded = JSON.parse(bodyToString(opts.body)) as Record<
+      string,
+      unknown
+    >
+    const include = forwarded.include as Array<string> | undefined
+    const hasUnsupportedParameter =
+      "temperature" in forwarded
+      || "top_p" in forwarded
+      || "top_logprobs" in forwarded
+      || "logprobs" in forwarded
+      || include?.includes("message.output_text.logprobs")
+
+    return new Response(
+      JSON.stringify(
+        hasUnsupportedParameter ?
+          {
+            error: {
+              message: "Unsupported parameter for gpt-6-astra",
+              code: "unsupported_parameter",
+            },
+          }
+        : { id: "resp_astra" },
+      ),
+      {
+        status: hasUnsupportedParameter ? 400 : 200,
+        headers: { "content-type": "application/json" },
+      },
+    )
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await createResponses(payload)
+  const forwarded = JSON.parse(
+    bodyToString(fetchMock.mock.calls[0][1].body),
+  ) as Record<string, unknown>
+
+  expect(response.status).toBe(200)
+  expect(forwarded).not.toHaveProperty("temperature")
+  expect(forwarded).not.toHaveProperty("top_p")
+  expect(forwarded).not.toHaveProperty("top_logprobs")
+  expect(forwarded).not.toHaveProperty("logprobs")
+  expect(forwarded.include).toEqual(["reasoning.encrypted_content"])
+})
+
+test.each(["gpt-5.6-sol", "gpt-6-astra-2026-09-01"])(
+  "preserves sampling and logprob parameters for %s",
+  async (model) => {
+    const payload = {
+      model,
+      input: "Say hello",
+      temperature: 0.2,
+      top_p: 0.9,
+      top_logprobs: 5,
+      logprobs: true,
+      include: ["message.output_text.logprobs", "reasoning.encrypted_content"],
+    } as ResponsesApiRequest
+
+    const fetchMock = mock((_url: string, opts: RequestInit) => {
+      return new Response(bodyToString(opts.body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    await createResponses(payload)
+    const forwarded = JSON.parse(
+      bodyToString(fetchMock.mock.calls[0][1].body),
+    ) as Record<string, unknown>
+
+    expect(forwarded.temperature).toBe(0.2)
+    expect(forwarded.top_p).toBe(0.9)
+    expect(forwarded.top_logprobs).toBe(5)
+    expect(forwarded.logprobs).toBe(true)
+    expect(forwarded.include).toEqual([
+      "message.output_text.logprobs",
+      "reasoning.encrypted_content",
+    ])
+  },
+)
+
 test("maps remaining upstream Responses 413 to prompt-too-long error", async () => {
   const payload: ResponsesApiRequest = {
     model: "gpt-5.5",

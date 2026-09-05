@@ -389,7 +389,7 @@ This proxy supports the [OpenAI Codex CLI](https://github.com/openai/codex) thro
 Add the following to your `~/.codex/config.toml`:
 
 ```toml
-model = "gpt-5.5"
+model = "gpt-6-astra"
 model_provider = "copilot_proxy"
 model_reasoning_effort = "high"
 
@@ -443,6 +443,7 @@ codex -c model_provider='"openai"'
 
 ### Notes
 
+- GPT-6 Astra uses the Responses API; before forwarding, the proxy removes Astra-incompatible sampling and logprob fields: `temperature`, `top_p`, `top_logprobs`, `logprobs`, and `message.output_text.logprobs` from `include`.
 - `service_tier` is ChatGPT-plan-specific. Codex may send it, but Copilot's Responses API rejects it, so the proxy strips it before forwarding.
 - `model_reasoning_effort = "high"` is passed through verbatim in the Responses request. The proxy does not validate it against the model's advertised effort levels.
 - Codex model-catalog refreshes keep Codex's bundled metadata and instructions. Requests with Codex's `client_version` query receive its native empty-catalog shape; ordinary `GET /v1/models` requests still return the full OpenAI-compatible model list.
