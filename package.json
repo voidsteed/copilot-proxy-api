@@ -1,6 +1,6 @@
 {
   "name": "copilot-proxy-api",
-  "version": "0.10.28",
+  "version": "0.10.29",
   "description": "Self-hosted GitHub Copilot bridge for Claude Code and Codex CLI with OpenAI Responses, Anthropic Messages, streaming resilience, and context management.",
   "keywords": [
     "proxy",
