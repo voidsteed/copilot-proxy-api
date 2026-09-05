@@ -67,6 +67,7 @@ This project is a fork of [copilot-api](https://github.com/ericc-ch/copilot-api)
 - **Manual Request Approval**: Manually approve or deny each API request for fine-grained control over usage (`--manual`).
 - **Token Visibility**: Option to display GitHub and Copilot tokens during authentication and refresh for debugging (`--show-token`).
 - **Flexible Authentication**: Authenticate interactively or provide a GitHub token directly, suitable for CI/CD environments.
+- **Authentication Recovery**: GitHub user and Copilot token requests have a 10-second deadline. Transient token failures are retried; temporary GitHub user lookup failures do not prevent startup with a saved token.
 - **Support for Different Account Types**: Works with individual, business, and enterprise GitHub Copilot plans.
 
 ## Claude Code Compatibility & Known Gaps
@@ -84,6 +85,7 @@ What works:
 - Client-requested model echoed back in `response.model` (Copilot's internal id is not leaked).
 - `request-id` / `x-request-id` response headers.
 - Stop-reason mapping including `content_filter` → `refusal` (Claude Code has dedicated UX for refusal blocks).
+- Responses-only models preserve supported `output_config.effort` settings and report output token-limit truncation as `max_tokens`, for both streaming and non-streaming Messages requests.
 - PDF text extraction for `document` blocks ≤ 3 MB. Password-protected PDFs are rejected with a Claude-Code-recognizable error message.
 
 Known gaps (these reflect Copilot's actual capabilities — they are not bugs to file):

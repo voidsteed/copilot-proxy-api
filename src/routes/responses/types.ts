@@ -49,7 +49,15 @@ export interface ResponsesApiRequest {
   safety_identifier?: string | null
   context_management?: Array<ResponsesContextManagementItem> | null
   reasoning?: {
-    effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | null
+    effort?:
+      | "none"
+      | "minimal"
+      | "low"
+      | "medium"
+      | "high"
+      | "xhigh"
+      | "max"
+      | null
     summary?: "auto" | "concise" | "detailed" | null
   } | null
   text?: {
@@ -123,7 +131,10 @@ export interface ResponsesApiResponse {
   output: Array<ResponsesOutputItem>
   output_text: string
   usage?: ResponsesUsage
-  status: "completed" | "failed" | "in_progress"
+  status: "completed" | "failed" | "in_progress" | "incomplete"
+  incomplete_details?: {
+    reason?: "max_output_tokens" | "content_filter"
+  } | null
 }
 
 export interface ResponsesUsage {
@@ -136,7 +147,7 @@ export interface ResponsesOutputItem {
   id: string
   type: "message" | "function_call" | "reasoning"
   role?: "assistant"
-  status?: "completed" | "in_progress"
+  status?: "completed" | "in_progress" | "incomplete"
   content?: Array<ResponsesOutputContent>
   // For function_call type
   name?: string

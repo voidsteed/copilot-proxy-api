@@ -25,6 +25,7 @@ import {
   type AnthropicUserContentBlock,
   type AnthropicUserMessage,
 } from "./anthropic-types"
+import { translateReasoningEffort } from "./reasoning-effort"
 import { mapOpenAIStopReasonToAnthropic } from "./utils"
 
 // Payload translation
@@ -54,21 +55,6 @@ export function translateToOpenAI(
       payload.output_config?.effort,
     ),
   }
-}
-
-function translateReasoningEffort(
-  model: string,
-  effort: ChatCompletionsPayload["reasoning_effort"],
-): ChatCompletionsPayload["reasoning_effort"] {
-  if (!effort) return undefined
-
-  const modelMetadata = state.models?.data.find((m) => m.id === model)
-  if (!modelMetadata) return effort
-
-  const supportedEfforts = modelMetadata.capabilities.supports.reasoning_effort
-  if (!supportedEfforts?.length) return undefined
-
-  return supportedEfforts.includes(effort) ? effort : undefined
 }
 
 function stripTrailingAssistantPrefill(

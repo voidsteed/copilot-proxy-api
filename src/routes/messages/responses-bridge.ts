@@ -17,6 +17,8 @@ import type {
   AnthropicUserContentBlock,
 } from "./anthropic-types"
 
+import { translateReasoningEffort } from "./reasoning-effort"
+
 interface SSEStream {
   writeSSE(event: { data: string; event: string }): Promise<void>
 }
@@ -25,6 +27,8 @@ export function translateAnthropicMessagesToResponses(
   payload: AnthropicMessagesPayload,
   model: string,
 ): ResponsesApiRequest {
+  const effort = translateReasoningEffort(model, payload.output_config?.effort)
+
   return {
     model,
     input: payload.messages.flatMap((message) => translateMessage(message)),
@@ -32,6 +36,7 @@ export function translateAnthropicMessagesToResponses(
     max_output_tokens: payload.max_tokens,
     temperature: payload.temperature,
     top_p: payload.top_p,
+    reasoning: effort ? { effort } : undefined,
     stream: false,
     tools: payload.tools?.map((tool) => ({
       type: "function",
@@ -49,6 +54,10 @@ export function translateResponsesToAnthropicMessage(
 ): AnthropicResponse {
   const content = response.output.flatMap((item) => translateOutputItem(item))
   const hasToolUse = content.some((block) => block.type === "tool_use")
+  const contentStopReason = hasToolUse ? "tool_use" : "end_turn"
+  const hitMaxTokens =
+    response.status === "incomplete"
+    && response.incomplete_details?.reason === "max_output_tokens"
 
   return {
     id: response.id,
@@ -56,7 +65,7 @@ export function translateResponsesToAnthropicMessage(
     role: "assistant",
     content,
     model: clientModel,
-    stop_reason: hasToolUse ? "tool_use" : "end_turn",
+    stop_reason: hitMaxTokens ? "max_tokens" : contentStopReason,
     stop_sequence: null,
     usage: {
       input_tokens: response.usage?.input_tokens ?? 0,

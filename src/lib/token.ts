@@ -16,29 +16,47 @@ const readGithubToken = () => fs.readFile(PATHS.GITHUB_TOKEN_PATH, "utf8")
 const writeGithubToken = (token: string) =>
   fs.writeFile(PATHS.GITHUB_TOKEN_PATH, token)
 
-let copilotTokenRefresh: Promise<string> | undefined
+interface TokenRetryOptions {
+  attempts?: number
+  backoff?: "linear" | "exponential"
+}
 
-export async function getCopilotTokenWithRetry(
+let copilotTokenRefresh:
+  | { promise: Promise<string>; options: Required<TokenRetryOptions> }
+  | undefined
+
+export function getCopilotTokenWithRetry(
   attempts = 3,
   retryDelayMs = 1000,
+  backoff: TokenRetryOptions["backoff"] = "linear",
 ) {
-  for (let attempt = 1; attempt <= attempts; attempt++) {
+  return getCopilotTokenWithRetryPolicy({ attempts, backoff }, retryDelayMs)
+}
+
+async function getCopilotTokenWithRetryPolicy(
+  options: Required<TokenRetryOptions>,
+  retryDelayMs: number,
+) {
+  for (let attempt = 1; attempt <= options.attempts; attempt++) {
     try {
       return await getCopilotToken()
     } catch (error) {
-      if (attempt === attempts || !isTransientTokenError(error)) throw error
+      if (attempt === options.attempts || !isTransientTokenError(error))
+        throw error
 
       consola.warn(
-        `Failed to get Copilot token; retrying (${attempt}/${attempts})`,
+        `Failed to get Copilot token; retrying (${attempt}/${options.attempts})`,
       )
-      await sleep(retryDelayMs * attempt)
+      const multiplier =
+        options.backoff === "exponential" ? 2 ** (attempt - 1) : attempt
+      await sleep(retryDelayMs * multiplier)
     }
   }
 
   throw new Error("Failed to get Copilot token")
 }
 
-function isTransientTokenError(error: unknown): boolean {
+export function isTransientTokenError(error: unknown): boolean {
   if (!(error instanceof HTTPError)) return true
 
   return (
@@ -48,12 +66,31 @@ function isTransientTokenError(error: unknown): boolean {
   )
 }
 
-export function refreshCopilotToken(staleToken?: string): Promise<string> {
+export function refreshCopilotToken(
+  staleToken?: string,
+  options: TokenRetryOptions = {},
+): Promise<string> {
   if (staleToken && state.copilotToken && state.copilotToken !== staleToken) {
     return Promise.resolve(state.copilotToken)
   }
 
-  copilotTokenRefresh ??= getCopilotToken()
+  if (copilotTokenRefresh) {
+    // A scheduled renewal can extend the shared loop without resetting attempts.
+    copilotTokenRefresh.options.attempts = Math.max(
+      copilotTokenRefresh.options.attempts,
+      options.attempts ?? 3,
+    )
+    if (options.backoff === "exponential") {
+      copilotTokenRefresh.options.backoff = "exponential"
+    }
+    return copilotTokenRefresh.promise
+  }
+
+  const retryOptions: Required<TokenRetryOptions> = {
+    attempts: options.attempts ?? 3,
+    backoff: options.backoff ?? "linear",
+  }
+  const promise = getCopilotTokenWithRetryPolicy(retryOptions, 1000)
     .then(({ token }) => {
       state.copilotToken = token
       consola.debug("Copilot token refreshed")
@@ -66,7 +103,8 @@ export function refreshCopilotToken(staleToken?: string): Promise<string> {
       copilotTokenRefresh = undefined
     })
 
-  return copilotTokenRefresh
+  copilotTokenRefresh = { promise, options: retryOptions }
+  return promise
 }
 
 export const setupCopilotToken = async () => {
@@ -81,34 +119,17 @@ export const setupCopilotToken = async () => {
 
   const refreshInterval = (refresh_in - 60) * 1000
 
-  const refreshWithRetry = async (maxRetries = 5, baseDelay = 1000) => {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        await refreshCopilotToken()
-        return // Success, exit retry loop
-      } catch (error) {
-        consola.error(
-          `Failed to refresh Copilot token (attempt ${attempt}/${maxRetries}):`,
-          error,
-        )
-
-        if (attempt < maxRetries) {
-          const delay = baseDelay * Math.pow(2, attempt - 1) // Exponential backoff
-          consola.info(`Retrying in ${delay / 1000} seconds...`)
-          await new Promise((resolve) => setTimeout(resolve, delay))
-        } else {
-          consola.error(
-            "Max retries reached. Token refresh failed, but keeping server alive.",
-          )
-          // Don't throw - keep the server running with the old token
-        }
-      }
-    }
-  }
-
   setInterval(() => {
     consola.debug("Refreshing Copilot token")
-    void refreshWithRetry()
+    void refreshCopilotToken(undefined, {
+      attempts: 5,
+      backoff: "exponential",
+    }).catch((error: unknown) => {
+      consola.error(
+        "Token refresh failed, but keeping server alive with the old token.",
+        error,
+      )
+    })
   }, refreshInterval)
 }
 

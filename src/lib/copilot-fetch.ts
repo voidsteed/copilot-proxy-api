@@ -1,6 +1,7 @@
 import consola from "consola"
 
-import { refreshCopilotToken } from "./token"
+import { HTTPError } from "./error"
+import { isTransientTokenError, refreshCopilotToken } from "./token"
 import { sleep } from "./utils"
 
 const DEFAULT_ATTEMPTS = 3
@@ -11,6 +12,8 @@ export interface CopilotFetchOptions extends RequestInit {
   attempts?: number
   retryDelayMs?: number
 }
+
+class CopilotTokenRefreshError extends Error {}
 
 export async function copilotFetch(
   url: string,
@@ -41,6 +44,16 @@ export async function copilotFetch(
         `Copilot ${requestLabel} returned ${response.status}; retrying (${attempt}/${attempts})`,
       )
     } catch (error) {
+      if (error instanceof CopilotTokenRefreshError) {
+        const cause = error.cause
+        // Concurrent refresh callers each need a readable error response body.
+        throw cause instanceof HTTPError ?
+            new HTTPError(
+              cause.message,
+              new Response(cause.response.clone().body, cause.response),
+            )
+          : error
+      }
       lastError = error
       if (
         attempt === attempts
@@ -73,21 +86,27 @@ async function retryWithRefreshedToken(
   const staleToken = getBearerToken(init.headers)
   const requestLabel = formatRequestLabel(url, init.method)
 
+  let token: string
   try {
-    const token = await refreshCopilotToken(staleToken)
-    const headers = new Headers(init.headers)
-    headers.set("Authorization", `Bearer ${token}`)
-    init.headers = headers
-    consola.warn(
-      `Copilot ${requestLabel} returned ${response.status}; refreshed token and retrying`,
-    )
-    return await fetch(url, init)
+    token = await refreshCopilotToken(staleToken)
   } catch (error) {
     consola.warn(
       `Copilot token refresh failed after ${requestLabel} returned ${response.status}: ${formatErrorMessage(error)}`,
     )
-    return response
+    if (!isTransientTokenError(error)) return response
+    // The shared refresh has already exhausted its own retry budget.
+    throw new CopilotTokenRefreshError("Copilot token refresh failed", {
+      cause: error,
+    })
   }
+
+  const headers = new Headers(init.headers)
+  headers.set("Authorization", `Bearer ${token}`)
+  init.headers = headers
+  consola.warn(
+    `Copilot ${requestLabel} returned ${response.status}; refreshed token and retrying`,
+  )
+  return fetch(url, init)
 }
 
 function getBearerToken(headers: RequestInit["headers"]): string | undefined {

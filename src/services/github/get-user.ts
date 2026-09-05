@@ -8,6 +8,7 @@ export async function getGitHubUser() {
       authorization: `token ${state.githubToken}`,
       ...standardHeaders(),
     },
+    signal: AbortSignal.timeout(10_000),
   })
 
   if (!response.ok) throw new HTTPError("Failed to get GitHub user", response)
