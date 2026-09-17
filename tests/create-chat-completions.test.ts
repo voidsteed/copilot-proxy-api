@@ -16,7 +16,10 @@ state.accountType = "individual"
 
 function mockSuccessfulFetch() {
   const fetchMock = mock(
-    (_url: string, opts: { headers: Record<string, string> }) => {
+    (
+      _url: string,
+      opts: { body?: unknown; headers: Record<string, string> },
+    ) => {
       return {
         ok: true,
         json: () => ({ id: "123", object: "chat.completion", choices: [] }),
@@ -60,6 +63,38 @@ test("sets X-Initiator to user if only user present", async () => {
     fetchMock.mock.calls[0][1] as { headers: Record<string, string> }
   ).headers
   expect(headers["X-Initiator"]).toBe("user")
+})
+
+test("uses max_completion_tokens for GPT-5 models", async () => {
+  const fetchMock = mockSuccessfulFetch()
+
+  await createChatCompletions({
+    messages: [{ role: "user", content: "hi" }],
+    model: "gpt-5.4",
+    max_tokens: 123,
+  })
+
+  const body = JSON.parse(
+    fetchMock.mock.calls[0][1].body as string,
+  ) as ChatCompletionsPayload
+  expect(body.max_completion_tokens).toBe(123)
+  expect(body).not.toHaveProperty("max_tokens")
+})
+
+test("keeps max_tokens for legacy chat completion models", async () => {
+  const fetchMock = mockSuccessfulFetch()
+
+  await createChatCompletions({
+    messages: [{ role: "user", content: "hi" }],
+    model: "gpt-4o",
+    max_tokens: 123,
+  })
+
+  const body = JSON.parse(
+    fetchMock.mock.calls[0][1].body as string,
+  ) as ChatCompletionsPayload
+  expect(body.max_tokens).toBe(123)
+  expect(body).not.toHaveProperty("max_completion_tokens")
 })
 
 test("large upstream timeout becomes prompt-too-long error", async () => {

@@ -73,7 +73,7 @@ export async function createResponses(
   }
   const bodyLength = JSON.stringify(upstreamPayload).length
 
-  consola.info(
+  consola.debug(
     `Sending responses payload: ${bodyLength} bytes, model: ${payload.model}`,
   )
 

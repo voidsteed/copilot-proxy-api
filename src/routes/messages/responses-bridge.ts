@@ -33,6 +33,10 @@ export function translateAnthropicMessagesToResponses(
     model,
     input: payload.messages.flatMap((message) => translateMessage(message)),
     instructions: translateSystem(payload.system),
+    // Forwarded verbatim. Silently raising a client's cap to a floor the proxy
+    // guesses upstream wants leaves the caller unable to reason about what it
+    // asked for; if Copilot rejects a small value, that rejection is the honest
+    // answer and reaches the client intact.
     max_output_tokens: payload.max_tokens,
     temperature: payload.temperature,
     top_p: payload.top_p,
@@ -43,6 +47,10 @@ export function translateAnthropicMessagesToResponses(
       name: tool.name,
       description: tool.description,
       parameters: tool.input_schema,
+      // Anthropic tools allow optional and action-dependent fields. Copilot
+      // Responses defaults omitted strictness to true and rewrites every
+      // property as required, which makes multiplexed MCP schemas unusable.
+      strict: false,
     })),
     tool_choice: translateToolChoice(payload.tool_choice),
   }
@@ -58,6 +66,7 @@ export function translateResponsesToAnthropicMessage(
   const hitMaxTokens =
     response.status === "incomplete"
     && response.incomplete_details?.reason === "max_output_tokens"
+  const cachedTokens = response.usage?.input_tokens_details?.cached_tokens ?? 0
 
   return {
     id: response.id,
@@ -68,8 +77,12 @@ export function translateResponsesToAnthropicMessage(
     stop_reason: hitMaxTokens ? "max_tokens" : contentStopReason,
     stop_sequence: null,
     usage: {
-      input_tokens: response.usage?.input_tokens ?? 0,
+      input_tokens: Math.max(
+        0,
+        (response.usage?.input_tokens ?? 0) - cachedTokens,
+      ),
       output_tokens: response.usage?.output_tokens ?? 0,
+      ...(cachedTokens > 0 ? { cache_read_input_tokens: cachedTokens } : {}),
     },
   }
 }

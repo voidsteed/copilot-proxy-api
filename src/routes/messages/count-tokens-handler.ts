@@ -2,6 +2,7 @@ import type { Context } from "hono"
 
 import consola from "consola"
 
+import { setRequestLogMetadata } from "~/lib/request-log"
 import { state } from "~/lib/state"
 import { getTokenCount } from "~/lib/tokenizer"
 
@@ -18,6 +19,7 @@ export async function handleCountTokens(c: Context) {
     const anthropicPayload = await c.req.json<AnthropicMessagesPayload>()
 
     const openAIPayload = translateToOpenAI(anthropicPayload)
+    setRequestLogMetadata(c, { model: openAIPayload.model })
 
     const selectedModel = state.models?.data.find(
       (model) => model.id === openAIPayload.model,
@@ -67,7 +69,7 @@ export async function handleCountTokens(c: Context) {
       finalTokenCount = Math.round(finalTokenCount * 1.03)
     }
 
-    consola.info("Token count:", finalTokenCount)
+    consola.debug("Token count:", finalTokenCount)
 
     return c.json({
       input_tokens: finalTokenCount,

@@ -5,6 +5,7 @@ import { streamSSE, type SSEMessage } from "hono/streaming"
 
 import { awaitApproval } from "~/lib/approval"
 import { checkRateLimit } from "~/lib/rate-limit"
+import { setRequestLogMetadata } from "~/lib/request-log"
 import { state } from "~/lib/state"
 import { getTokenCount } from "~/lib/tokenizer"
 import { isNullish } from "~/lib/utils"
@@ -19,6 +20,10 @@ export async function handleCompletion(c: Context) {
 
   let payload = await c.req.json<ChatCompletionsPayload>()
   consola.debug("Request payload:", JSON.stringify(payload).slice(-400))
+  setRequestLogMetadata(c, {
+    model: payload.model,
+    effort: payload.reasoning_effort,
+  })
 
   // Find the selected model
   const selectedModel = state.models?.data.find(
@@ -29,7 +34,7 @@ export async function handleCompletion(c: Context) {
   try {
     if (selectedModel) {
       const tokenCount = await getTokenCount(payload, selectedModel)
-      consola.info("Current token count:", tokenCount)
+      consola.debug("Current token count:", tokenCount)
     } else {
       consola.warn("No model selected, skipping token count calculation")
     }
@@ -39,7 +44,10 @@ export async function handleCompletion(c: Context) {
 
   if (state.manualApprove) await awaitApproval()
 
-  if (isNullish(payload.max_tokens)) {
+  if (
+    isNullish(payload.max_tokens)
+    && isNullish(payload.max_completion_tokens)
+  ) {
     payload = {
       ...payload,
       max_tokens: selectedModel?.capabilities.limits.max_output_tokens,

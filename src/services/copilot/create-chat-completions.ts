@@ -16,14 +16,16 @@ export const createChatCompletions = async (
 ) => {
   if (!state.copilotToken) throw new Error("Copilot token not found")
 
-  const enableVision = payload.messages.some(
+  const requestPayload = normalizeTokenLimitParameter(payload)
+
+  const enableVision = requestPayload.messages.some(
     (x) =>
       typeof x.content !== "string"
       && x.content?.some((x) => x.type === "image_url"),
   )
 
   // Agent/user check for X-Initiator header
-  const isAgentCall = payload.messages.some((msg) =>
+  const isAgentCall = requestPayload.messages.some((msg) =>
     ["assistant", "tool"].includes(msg.role),
   )
 
@@ -32,9 +34,9 @@ export const createChatCompletions = async (
     "X-Initiator": isAgentCall ? "agent" : "user",
   }
 
-  const body = JSON.stringify(payload)
-  consola.info(
-    `Sending payload: ${body.length} bytes, ${payload.messages.length} messages, model: ${payload.model}`,
+  const body = JSON.stringify(requestPayload)
+  consola.debug(
+    `Sending payload: ${body.length} bytes, ${requestPayload.messages.length} messages, model: ${requestPayload.model}`,
   )
 
   let response: Response
@@ -46,7 +48,7 @@ export const createChatCompletions = async (
     })
   } catch (error) {
     if (isLikelyContextOverflowTimeout(error, body.length)) {
-      throw createPromptTooLongError(payload, body.length)
+      throw createPromptTooLongError(requestPayload, body.length)
     }
     throw error
   }
@@ -92,7 +94,7 @@ export const createChatCompletions = async (
       // 168K for opus-4.7) rather than max_context_window_tokens (the
       // total window incl. output, ≥200K). Falling back to the larger field
       // and finally 200K preserves behavior for models lacking metadata.
-      throw createPromptTooLongError(payload, body.length)
+      throw createPromptTooLongError(requestPayload, body.length)
     }
 
     throw new HTTPError(
@@ -196,6 +198,7 @@ export interface ChatCompletionsPayload {
   temperature?: number | null
   top_p?: number | null
   max_tokens?: number | null
+  max_completion_tokens?: number | null
   stop?: string | Array<string> | null
   n?: number | null
   stream?: boolean | null
@@ -216,6 +219,36 @@ export interface ChatCompletionsPayload {
     | { type: "function"; function: { name: string } }
     | null
   user?: string | null
+}
+
+const MAX_COMPLETION_TOKENS_MODEL_PATTERN =
+  /^(?:gpt-5(?:[.-]|$)|o\d+(?:[.-]|$))/i
+
+function normalizeTokenLimitParameter(
+  payload: ChatCompletionsPayload,
+): ChatCompletionsPayload {
+  const modelFamily = state.models?.data.find(
+    (model) => model.id === payload.model,
+  )?.capabilities.family
+  const requiresMaxCompletionTokens = [payload.model, modelFamily].some(
+    (model) =>
+      model !== undefined && MAX_COMPLETION_TOKENS_MODEL_PATTERN.test(model),
+  )
+
+  if (!requiresMaxCompletionTokens) return payload
+
+  const normalized = { ...payload }
+  const maxTokens = normalized.max_tokens
+  delete normalized.max_tokens
+
+  if (
+    normalized.max_completion_tokens === undefined
+    || normalized.max_completion_tokens === null
+  ) {
+    normalized.max_completion_tokens = maxTokens
+  }
+
+  return normalized
 }
 
 export interface Tool {

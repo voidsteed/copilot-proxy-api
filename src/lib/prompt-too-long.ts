@@ -14,7 +14,8 @@ export function createPromptTooLongError(
   const modelCaps = state.models?.data.find((m) => m.id === payload.model)
     ?.capabilities.limits
   const modelLimit = getModelPromptLimit(payload.model, modelCaps)
-  const maxOutputTokens = payload.max_tokens ?? 0
+  const maxOutputTokens =
+    payload.max_completion_tokens ?? payload.max_tokens ?? 0
 
   consola.warn(
     `Context overflow -> returning 400 prompt-too-long (~${estimatedTokens} + ${maxOutputTokens} > ${modelLimit}) to trigger Claude Code reactive compaction`,
