@@ -27,6 +27,7 @@ interface RunServerOptions {
   showToken: boolean
   proxyEnv: boolean
   apiKey?: string
+  responsesContextTrim: boolean
 }
 
 export async function runServer(options: RunServerOptions): Promise<void> {
@@ -49,6 +50,12 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   state.rateLimitWait = options.rateLimitWait
   state.showToken = options.showToken
   state.localApiKeys = parseLocalApiKeys(options.apiKey)
+  state.responsesContextTrim = options.responsesContextTrim
+  if (state.responsesContextTrim) {
+    consola.warn(
+      "Responses context trimming enabled — old history will be rewritten to fit an estimated budget, which degrades prompt caching",
+    )
+  }
   if (state.localApiKeys.length > 0) {
     consola.info("Local API-key auth enabled")
   }
@@ -203,6 +210,12 @@ export const start = defineCommand({
       description:
         "Require one of these comma-separated local API keys for proxy routes",
     },
+    "responses-context-trim": {
+      type: "boolean",
+      default: false,
+      description:
+        "Trim old /responses history to fit an estimated token budget. Lossy: rewrites conversation history and breaks prompt caching. Off by default — Copilot enforces its own limits",
+    },
   },
   run({ args }) {
     const rateLimitRaw = args["rate-limit"]
@@ -221,6 +234,7 @@ export const start = defineCommand({
       showToken: args["show-token"],
       proxyEnv: args["proxy-env"],
       apiKey: args["api-key"],
+      responsesContextTrim: args["responses-context-trim"],
     })
   },
 })

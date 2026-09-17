@@ -23,8 +23,30 @@ import {
   stripEncryptedOutputParts,
 } from "~/services/copilot/encrypted-output-recovery"
 
+/**
+ * Hard transport ceiling. Azure Front Door rejects bodies above ~5.4 MB before
+ * Copilot ever sees them, so trimming to stay under this is not a guess about
+ * token accounting — it is a verified wire limit. Enforced unconditionally.
+ */
 const MAX_RESPONSES_PAYLOAD_BYTES = 5_000_000
-const CHARS_PER_TOKEN_ESTIMATE = 3.5
+
+/**
+ * Bytes per token for Responses payloads, used only when opt-in token-derived
+ * trimming is enabled.
+ *
+ * Measured against multi-turn payloads built from this repository's own source
+ * (user messages, function_call items, large function_call_output bodies,
+ * assistant replies): 4.4 JSON bytes per content token, 3.7 per token of the
+ * serialized JSON itself. The previous value of 3.5 was inherited from
+ * context-manager.ts, where it measures *unescaped content length* rather than
+ * serialized JSON — copying the constant silently changed its basis and made
+ * the derived ceiling ~26% too aggressive, engaging trimming at roughly 77% of
+ * a model's real window.
+ *
+ * 4.3 is the conservative end of what was measured. Neither figure is Copilot's
+ * own prompt-token count, which is why this no longer gates the default path.
+ */
+const CHARS_PER_TOKEN_ESTIMATE = 4.3
 const TOKEN_RESERVE = 8_000
 const IMAGE_STRIPPED_PLACEHOLDER =
   "[image removed to stay under upstream payload limit]"
@@ -92,14 +114,22 @@ export async function createResponses(
     consola.error(`Request payload size: ${result.body.length} bytes`)
 
     if (isContextOverflow(response, errorBody, result.body.length)) {
-      const estimatedTokens = Math.ceil(result.body.length / 4)
       const modelCaps = state.models?.data.find((m) => m.id === payload.model)
         ?.capabilities.limits
-      const modelLimit = getModelPromptLimit(payload.model, modelCaps)
       const maxOutputTokens = payload.max_output_tokens ?? 0
 
+      // Prefer the numbers Copilot reported over a local estimate. Claude Code
+      // uses the gap between them to size its compaction pass, so substituting
+      // a bytes/4 guess for upstream's real count makes it compact by the wrong
+      // amount. Fall back to the estimate only when upstream gave us nothing.
+      const upstream = parseUpstreamTokenCounts(errorBody)
+      const estimatedTokens = upstream.used ?? Math.ceil(result.body.length / 4)
+      const modelLimit =
+        upstream.limit ?? getModelPromptLimit(payload.model, modelCaps)
+      const source = upstream.used ? "upstream-reported" : "estimated"
+
       consola.warn(
-        `Responses context overflow -> returning 400 prompt-too-long (~${estimatedTokens} + ${maxOutputTokens} > ${modelLimit})`,
+        `Responses context overflow -> returning 400 prompt-too-long (${source}: ~${estimatedTokens} + ${maxOutputTokens} > ${modelLimit})`,
       )
 
       throw new HTTPError(
@@ -110,6 +140,9 @@ export async function createResponses(
             error: {
               type: "invalid_request_error",
               message: `prompt is too long: input length and \`max_tokens\` exceed context limit: ${estimatedTokens} + ${maxOutputTokens} > ${modelLimit} tokens`,
+              // Preserve what upstream actually said, so a client that wants
+              // to diagnose rather than just compact is not flying blind.
+              upstream_error: errorBody.slice(0, 2_000),
             },
           }),
           {
@@ -277,7 +310,22 @@ function fitResponsesPayload(
   return current
 }
 
+/**
+ * Byte ceiling for the forwarded payload.
+ *
+ * By default this is the transport ceiling alone: the proxy forwards the
+ * client's history verbatim and lets Copilot enforce its own token limits, so
+ * a rejection is upstream's real answer rather than a local guess. Rewriting
+ * history pre-emptively both discards context Copilot would have accepted and
+ * breaks prompt-cache continuity, because `dropOldInputItems` rewrites from the
+ * oldest item forward — exactly the stable prefix a cache is keyed on.
+ *
+ * With `responsesContextTrim` enabled, the smaller token-derived ceiling is
+ * applied too, restoring the previous lossy behavior for anyone who wants it.
+ */
 function computeResponsesPayloadCeiling(modelId: string): number {
+  if (!state.responsesContextTrim) return MAX_RESPONSES_PAYLOAD_BYTES
+
   const limits = state.models?.data.find((m) => m.id === modelId)?.capabilities
     .limits
   const maxPromptTokens = getKnownModelPromptLimit(modelId, limits)
@@ -350,6 +398,20 @@ function replaceImageWithPlaceholder(
   return { ...payload, input }
 }
 
+/**
+ * Replace the oldest history with placeholders until the payload fits.
+ *
+ * Walks oldest → newest: the trailing items carry the active request, so
+ * anything dropped has to come off the front. This is unavoidably hostile to
+ * prompt caching — a cache is keyed on a stable prefix, and rewriting item 0
+ * invalidates everything after it — but the alternative (dropping recent turns
+ * to preserve the cacheable prefix) throws away exactly the context the model
+ * needs most. The real mitigation is not running this at all by default; see
+ * computeResponsesPayloadCeiling.
+ *
+ * The two most recent droppable items are always preserved, as is anything
+ * system/developer.
+ */
 function dropOldInputItems(
   payload: ResponsesApiRequest,
   ceiling: number,
@@ -622,23 +684,89 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
 
+/**
+ * Error markers that unambiguously mean "the prompt did not fit". These are
+ * upstream saying so explicitly, so they are safe to act on regardless of
+ * payload size.
+ */
+const CONTEXT_OVERFLOW_PATTERNS = [
+  /request entity too large/i,
+  /exceeds the limit of \d+/i,
+  /context_length_exceeded/i,
+  /model_max_prompt_tokens_exceeded/i,
+  /payload too large/i,
+  /maximum context length/i,
+  /prompt is too long/i,
+]
+
+/**
+ * Markers of a transient upstream outage. These can coincide with a large
+ * payload without the payload being the cause, so they must never be read as
+ * context overflow — doing so makes a client compact away history to work
+ * around what is really a Copilot hiccup.
+ */
+const TRANSIENT_OUTAGE_PATTERNS = [
+  /service unavailable/i,
+  /bad gateway/i,
+  /temporarily unavailable/i,
+  /upstream connect error/i,
+  /overloaded/i,
+  /try again later/i,
+]
+
 function isContextOverflow(
   response: Response,
   errorBody: string,
   bodyLength: number,
 ): boolean {
-  return (
-    response.status === 413
-    || /request entity too large/i.test(errorBody)
-    || /exceeds the limit of \d+/i.test(errorBody)
-    || /context_length_exceeded/i.test(errorBody)
-    || /operation timed out/i.test(errorBody)
-    || /payload too large/i.test(errorBody)
-    || /maximum context length/i.test(errorBody)
-    || (response.status >= 500
-      && response.status < 600
-      && bodyLength > 2_000_000)
+  if (response.status === 413) return true
+  if (CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorBody))) {
+    return true
+  }
+  if (TRANSIENT_OUTAGE_PATTERNS.some((pattern) => pattern.test(errorBody))) {
+    return false
+  }
+
+  // Copilot's backend hangs rather than cleanly rejecting in the ~2.5-5.3 MB
+  // dead zone, which Bun surfaces as a 500 or an upstream timeout. Restrict
+  // that inference to plain 500s: 502/503/504 are gateway-level outages that
+  // say nothing about whether the prompt fit.
+  const isDeadZoneHang =
+    (response.status === 500 || /operation timed out/i.test(errorBody))
+    && bodyLength > 2_000_000
+
+  return isDeadZoneHang
+}
+
+interface UpstreamTokenCounts {
+  limit?: number
+  used?: number
+}
+
+/**
+ * Pull the token counts Copilot actually reported out of an error body, so the
+ * client sees upstream's numbers rather than a local guess. Covers the phrasings
+ * Copilot has emitted: "maximum context length is N tokens ... resulted in M
+ * tokens", "exceeds the limit of N", and JSON bodies carrying explicit fields.
+ */
+function parseUpstreamTokenCounts(errorBody: string): UpstreamTokenCounts {
+  const counts: UpstreamTokenCounts = {}
+
+  const maxContext = /maximum context length is (\d+) tokens/i.exec(errorBody)
+  if (maxContext) counts.limit = Number(maxContext[1])
+
+  const resulted = /(?:resulted in|you requested|requested) (\d+) tokens/i.exec(
+    errorBody,
   )
+  if (resulted) counts.used = Number(resulted[1])
+
+  const exceedsLimit = /exceeds the limit of (\d+)/i.exec(errorBody)
+  if (exceedsLimit) counts.limit ??= Number(exceedsLimit[1])
+
+  const promptTokens = /(\d+) prompt tokens/i.exec(errorBody)
+  if (promptTokens) counts.used ??= Number(promptTokens[1])
+
+  return counts
 }
 
 function sanitizeResponsesPayload(

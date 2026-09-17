@@ -37,6 +37,7 @@ state.models = {
 
 afterEach(() => {
   mock.restore()
+  state.responsesContextTrim = false
 })
 
 function bodyToString(body: unknown): string {
@@ -81,6 +82,8 @@ test("strips old Responses images when payload exceeds upstream byte limit", asy
 })
 
 test("drops old Responses input history when payload exceeds model token budget", async () => {
+  state.responsesContextTrim = true
+
   const payload: ResponsesApiRequest = {
     model: "gpt-5.5",
     instructions: "Keep the latest task context.",
@@ -93,7 +96,7 @@ test("drops old Responses input history when payload exceeds model token budget"
   const fetchMock = mock((_url: string, opts: RequestInit) => {
     const body = bodyToString(opts.body)
     return new Response(JSON.stringify({ id: "resp_456" }), {
-      status: body.length > 924_000 ? 400 : 200,
+      status: body.length > 1_135_200 ? 400 : 200,
       headers: { "content-type": "application/json" },
     })
   })
@@ -104,7 +107,7 @@ test("drops old Responses input history when payload exceeds model token budget"
   const forwarded = JSON.parse(sentBody) as ResponsesApiRequest
 
   expect(response.status).toBe(200)
-  expect(sentBody.length).toBeLessThanOrEqual(924_000)
+  expect(sentBody.length).toBeLessThanOrEqual(1_135_200)
   expect(JSON.stringify(forwarded.input)).toContain(
     "older response input omitted to stay under context limit",
   )
@@ -112,6 +115,8 @@ test("drops old Responses input history when payload exceeds model token budget"
 })
 
 test("drops unknown large Responses item fields from old history", async () => {
+  state.responsesContextTrim = true
+
   const payload = {
     model: "gpt-5.5",
     input: [
@@ -135,7 +140,7 @@ test("drops unknown large Responses item fields from old history", async () => {
   const fetchMock = mock((_url: string, opts: RequestInit) => {
     const body = bodyToString(opts.body)
     return new Response(JSON.stringify({ id: "resp_789" }), {
-      status: body.length > 924_000 ? 413 : 200,
+      status: body.length > 1_135_200 ? 413 : 200,
       headers: { "content-type": "application/json" },
     })
   })
@@ -146,12 +151,14 @@ test("drops unknown large Responses item fields from old history", async () => {
   const forwarded = JSON.parse(sentBody) as ResponsesApiRequest
 
   expect(response.status).toBe(200)
-  expect(sentBody.length).toBeLessThanOrEqual(924_000)
+  expect(sentBody.length).toBeLessThanOrEqual(1_135_200)
   expect(JSON.stringify(forwarded.input)).not.toContain("read_image_batch")
   expect(JSON.stringify(forwarded.input)).toContain("continue")
 })
 
 test("does not forward orphaned Responses function call outputs after fitting", async () => {
+  state.responsesContextTrim = true
+
   const payload = {
     model: "gpt-5.5",
     input: [
@@ -163,7 +170,7 @@ test("does not forward orphaned Responses function call outputs after fitting", 
       },
       ...Array.from({ length: 4 }, (_, index) => ({
         role: index % 2 === 0 ? "user" : "assistant",
-        content: `Old turn ${index}\n${"x".repeat(260_000)}`,
+        content: `Old turn ${index}\n${"x".repeat(340_000)}`,
       })),
       {
         type: "function_call_output",
@@ -217,7 +224,7 @@ test("does not forward orphaned Responses function call outputs after fitting", 
   const forwarded = JSON.parse(sentBody) as ResponsesApiRequest
 
   expect(response.status).toBe(200)
-  expect(sentBody.length).toBeLessThanOrEqual(924_000)
+  expect(sentBody.length).toBeLessThanOrEqual(1_135_200)
   expect(JSON.stringify(forwarded.input)).not.toContain(
     '"type":"function_call_output"',
   )
@@ -227,6 +234,8 @@ test("does not forward orphaned Responses function call outputs after fitting", 
 })
 
 test("does not forward orphaned Responses custom tool call outputs after fitting", async () => {
+  state.responsesContextTrim = true
+
   const payload = {
     model: "gpt-5.5",
     input: [
@@ -238,7 +247,7 @@ test("does not forward orphaned Responses custom tool call outputs after fitting
       },
       ...Array.from({ length: 4 }, (_, index) => ({
         role: index % 2 === 0 ? "user" : "assistant",
-        content: `Old custom turn ${index}\n${"x".repeat(260_000)}`,
+        content: `Old custom turn ${index}\n${"x".repeat(340_000)}`,
       })),
       {
         type: "custom_tool_call_output",
@@ -292,7 +301,7 @@ test("does not forward orphaned Responses custom tool call outputs after fitting
   const forwarded = JSON.parse(sentBody) as ResponsesApiRequest
 
   expect(response.status).toBe(200)
-  expect(sentBody.length).toBeLessThanOrEqual(924_000)
+  expect(sentBody.length).toBeLessThanOrEqual(1_135_200)
   expect(JSON.stringify(forwarded.input)).not.toContain(
     '"type":"custom_tool_call_output"',
   )
