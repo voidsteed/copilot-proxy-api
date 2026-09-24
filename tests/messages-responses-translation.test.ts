@@ -105,6 +105,26 @@ describe("Messages Responses reasoning effort", () => {
   })
 })
 
+describe("Messages Responses inline system messages", () => {
+  test("keeps inline system messages as user input, not assistant output", () => {
+    const result = translateAnthropicMessagesToResponses(
+      {
+        ...request,
+        messages: [
+          { role: "user", content: "Explain the result" },
+          { role: "system", content: "SessionStart hook additional context" },
+        ],
+      },
+      "gpt-5.5",
+    )
+
+    expect(result.input).toEqual([
+      { role: "user", content: "Explain the result" },
+      { role: "user", content: "SessionStart hook additional context" },
+    ])
+  })
+})
+
 interface ResponseCase {
   label: string
   response: ResponsesApiResponse

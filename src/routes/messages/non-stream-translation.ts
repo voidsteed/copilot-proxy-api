@@ -18,7 +18,9 @@ import {
   type AnthropicMessage,
   type AnthropicMessagesPayload,
   type AnthropicResponse,
+  type AnthropicSystemMessage,
   type AnthropicTextBlock,
+  type AnthropicThinkingBlock,
   type AnthropicTool,
   type AnthropicToolResultBlock,
   type AnthropicToolUseBlock,
@@ -346,13 +348,40 @@ function translateAnthropicMessagesToOpenAI(
 ): Array<Message> {
   const systemMessages = handleSystemPrompt(system)
 
-  const otherMessages = anthropicMessages.flatMap((message) =>
-    message.role === "user" ?
-      handleUserMessage(message)
-    : handleAssistantMessage(message),
-  )
+  const otherMessages = anthropicMessages.flatMap((message) => {
+    switch (message.role) {
+      case "user": {
+        return handleUserMessage(message)
+      }
+      case "system": {
+        return handleInlineSystemMessage(message)
+      }
+      default: {
+        return handleAssistantMessage(message)
+      }
+    }
+  })
 
   return [...systemMessages, ...otherMessages]
+}
+
+/**
+ * Claude Code sends hook context and reminders as `role: "system"` entries
+ * inside `messages`, often as the last one. Copilot chat completions has no
+ * mid-conversation system turn, and treating it as assistant either strips it
+ * as a prefill or attributes it to the model. Keep it in place as user
+ * context, which also leaves the cached system-prompt prefix untouched.
+ */
+function handleInlineSystemMessage(
+  message: AnthropicSystemMessage,
+): Array<Message> {
+  const text = inlineSystemText(message)
+  return text ? [{ role: "user", content: text }] : []
+}
+
+export function inlineSystemText(message: AnthropicSystemMessage): string {
+  if (typeof message.content === "string") return message.content
+  return message.content.map((block) => block.text).join("\n\n")
 }
 
 // Reserved keywords that GitHub Copilot API blocks in system prompts
@@ -443,17 +472,15 @@ function handleAssistantMessage(
     (block): block is AnthropicTextBlock => block.type === "text",
   )
 
-  // Thinking blocks have signed-by-Anthropic semantics that Copilot can't
-  // verify or replay. Promoting their content to plain text would destroy
-  // the assistant turn semantics (the model would treat its own private
-  // reasoning as visible text). Drop them cleanly on the request side.
   const allTextContent = textBlocks.map((b) => b.text).join("\n\n")
+  const reasoning = getPriorReasoning(message.content)
 
   return toolUseBlocks.length > 0 ?
       [
         {
           role: "assistant",
           content: allTextContent || null,
+          ...reasoning,
           tool_calls: toolUseBlocks.map((toolUse) => ({
             id: toolUse.id,
             type: "function",
@@ -468,8 +495,38 @@ function handleAssistantMessage(
         {
           role: "assistant",
           content: mapContent(message.content),
+          ...reasoning,
         },
       ]
+}
+
+/**
+ * Send the model's earlier reasoning back to Copilot the way it arrived:
+ * `reasoning_text` plus the `reasoning_opaque` signature Copilot issued with
+ * it (forwarded to Claude Code as the thinking block's signature). Dropping
+ * it makes Opus re-derive its plan from scratch on every tool-use turn: on
+ * captured Opus 5.5 xhigh turns that was 3-10x more output tokens.
+ *
+ * Only signed blocks are replayed, so reasoning that didn't come from Copilot
+ * (or a stripped block) is never presented to the model as its own.
+ */
+function getPriorReasoning(
+  content: Array<AnthropicAssistantContentBlock>,
+): Pick<Message, "reasoning_opaque" | "reasoning_text"> {
+  const signed = content.filter(
+    (block): block is AnthropicThinkingBlock =>
+      block.type === "thinking" && Boolean(block.signature),
+  )
+  if (signed.length === 0) return {}
+
+  const text = signed
+    .map((block) => block.thinking)
+    .filter(Boolean)
+    .join("\n\n")
+  return {
+    ...(text && { reasoning_text: text }),
+    reasoning_opaque: signed[0].signature,
+  }
 }
 
 function mapContent(
@@ -500,7 +557,7 @@ function mapContent(
 
         break
       }
-      // Thinking blocks dropped — see handleAssistantMessage rationale.
+      // Thinking blocks travel as reasoning_text/reasoning_opaque, not content.
       case "image": {
         contentParts.push({
           type: "image_url",
@@ -596,10 +653,12 @@ export function translateToAnthropic(
   stopReason = response.choices[0]?.finish_reason ?? stopReason
 
   // Process all choices to extract text and tool use blocks
+  const allThinkingBlocks: Array<AnthropicThinkingBlock> = []
   for (const choice of response.choices) {
     const textBlocks = getAnthropicTextBlocks(choice.message.content)
     const toolUseBlocks = getAnthropicToolUseBlocks(choice.message.tool_calls)
 
+    allThinkingBlocks.push(...getAnthropicThinkingBlocks(choice.message))
     allTextBlocks.push(...textBlocks)
     allToolUseBlocks.push(...toolUseBlocks)
 
@@ -609,14 +668,12 @@ export function translateToAnthropic(
     }
   }
 
-  // Note: GitHub Copilot doesn't generate thinking blocks, so we don't include them in responses
-
   return {
     id: response.id,
     type: "message",
     role: "assistant",
     model: clientModel ?? response.model,
-    content: [...allTextBlocks, ...allToolUseBlocks],
+    content: [...allThinkingBlocks, ...allTextBlocks, ...allToolUseBlocks],
     stop_reason: mapOpenAIStopReasonToAnthropic(stopReason),
     stop_sequence: null,
     usage: {
@@ -631,6 +688,19 @@ export function translateToAnthropic(
       }),
     },
   }
+}
+
+function getAnthropicThinkingBlocks(
+  message: ChatCompletionResponse["choices"][number]["message"],
+): Array<AnthropicThinkingBlock> {
+  if (!message.reasoning_text && !message.reasoning_opaque) return []
+  return [
+    {
+      type: "thinking",
+      thinking: message.reasoning_text ?? "",
+      ...(message.reasoning_opaque && { signature: message.reasoning_opaque }),
+    },
+  ]
 }
 
 function getAnthropicTextBlocks(

@@ -21,6 +21,7 @@ export interface AnthropicMessagesPayload {
   thinking?: {
     type: "enabled" | "adaptive"
     budget_tokens?: number
+    display?: "summarized" | "omitted"
   }
   output_config?: {
     effort?: "low" | "medium" | "high" | "xhigh" | "max"
@@ -82,6 +83,7 @@ export interface AnthropicToolUseBlock {
 export interface AnthropicThinkingBlock {
   type: "thinking"
   thinking: string
+  signature?: string
 }
 
 export type AnthropicUserContentBlock =
@@ -105,7 +107,19 @@ export interface AnthropicAssistantMessage {
   content: string | Array<AnthropicAssistantContentBlock>
 }
 
-export type AnthropicMessage = AnthropicUserMessage | AnthropicAssistantMessage
+/**
+ * Mid-conversation system message. Claude Code sends these inside `messages`
+ * (e.g. SessionStart hook context), sometimes as the trailing entry.
+ */
+export interface AnthropicSystemMessage {
+  role: "system"
+  content: string | Array<AnthropicTextBlock>
+}
+
+export type AnthropicMessage =
+  | AnthropicUserMessage
+  | AnthropicAssistantMessage
+  | AnthropicSystemMessage
 
 export interface AnthropicTool {
   name: string
@@ -223,6 +237,7 @@ export interface AnthropicStreamState {
   messageStartSent: boolean
   contentBlockIndex: number
   contentBlockOpen: boolean
+  thinkingBlockOpen?: boolean
   toolCalls: {
     [openAIToolIndex: number]: {
       id: string

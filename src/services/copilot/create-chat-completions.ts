@@ -140,6 +140,10 @@ export interface ChatCompletionChunk {
 interface Delta {
   content?: string | null
   role?: "user" | "assistant" | "system" | "tool"
+  /** Copilot streams Claude's extended thinking here while it reasons. */
+  reasoning_text?: string | null
+  /** Signature for the reasoning, sent once when the thinking block ends. */
+  reasoning_opaque?: string | null
   tool_calls?: Array<{
     index: number
     id?: string
@@ -180,6 +184,8 @@ export interface ChatCompletionResponse {
 interface ResponseMessage {
   role: "assistant"
   content: string | null
+  reasoning_text?: string | null
+  reasoning_opaque?: string | null
   tool_calls?: Array<ToolCall>
 }
 
@@ -267,6 +273,10 @@ export interface Message {
   name?: string
   tool_calls?: Array<ToolCall>
   tool_call_id?: string
+  /** Prior Claude reasoning, sent back so the model can continue from it. */
+  reasoning_text?: string
+  /** Signature Copilot issued with that reasoning (`reasoning_opaque`). */
+  reasoning_opaque?: string
 }
 
 export interface ToolCall {
