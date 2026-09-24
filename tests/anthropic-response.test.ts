@@ -68,6 +68,32 @@ function isValidAnthropicStreamEvent(payload: unknown): boolean {
 }
 
 describe("OpenAI to Anthropic Non-Streaming Response Translation", () => {
+  test("puts Copilot reasoning in a leading thinking block", () => {
+    const response: ChatCompletionResponse = {
+      id: "msg_3",
+      object: "chat.completion",
+      created: 1,
+      model: "claude-opus-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "391",
+            reasoning_text: "17 * 23 = 391",
+            reasoning_opaque: "sig==",
+          },
+          finish_reason: "stop",
+          logprobs: null,
+        },
+      ],
+    }
+
+    expect(translateToAnthropic(response).content).toEqual([
+      { type: "thinking", thinking: "17 * 23 = 391", signature: "sig==" },
+      { type: "text", text: "391" },
+    ])
+  })
   test("should translate a simple text response correctly", () => {
     const openAIResponse: ChatCompletionResponse = {
       id: "chatcmpl-123",
@@ -361,5 +387,119 @@ describe("OpenAI to Anthropic Streaming Response Translation", () => {
     for (const event of translatedStream) {
       expect(isValidAnthropicStreamEvent(event)).toBe(true)
     }
+  })
+})
+
+type ChunkDelta = ChatCompletionChunk["choices"][number]["delta"]
+type ChunkFinish = ChatCompletionChunk["choices"][number]["finish_reason"]
+
+function opusChunk(
+  delta: ChunkDelta,
+  finishReason: ChunkFinish = null,
+): ChatCompletionChunk {
+  return {
+    id: "msg_1",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: "claude-opus-5.5",
+    choices: [{ index: 0, delta, finish_reason: finishReason, logprobs: null }],
+  }
+}
+
+function newStreamState(): AnthropicStreamState {
+  return {
+    messageStartSent: false,
+    contentBlockIndex: 0,
+    contentBlockOpen: false,
+    toolCalls: {},
+  }
+}
+
+describe("Copilot reasoning stream translation", () => {
+  test("forwards reasoning as a thinking block before the tool call", () => {
+    // Opus 5.5 can reason for minutes before a tiny tool call. Copilot
+    // streams that reasoning as reasoning_text + reasoning_opaque; dropping it
+    // leaves Claude Code with a silent stream the whole time.
+    const streamState = newStreamState()
+    const events = [
+      opusChunk({ content: null, reasoning_text: "Need to " }),
+      opusChunk({ content: null, reasoning_text: "list files" }),
+      opusChunk({ content: "", reasoning_opaque: "sig==" }),
+      opusChunk({
+        tool_calls: [
+          {
+            index: 0,
+            id: "toolu_1",
+            type: "function",
+            function: { name: "Bash", arguments: '{"command":"ls"}' },
+          },
+        ],
+      }),
+      opusChunk({}, "tool_calls"),
+    ].flatMap((c) => translateChunkToAnthropicEvents(c, streamState))
+
+    expect(events.map((e) => e.type)).toEqual([
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_delta",
+      "content_block_delta",
+      "content_block_stop",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+    ])
+    expect(events[1]).toEqual({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "thinking", thinking: "" },
+    })
+    expect(events[2]).toMatchObject({
+      index: 0,
+      delta: { type: "thinking_delta", thinking: "Need to " },
+    })
+    expect(events[4]).toMatchObject({
+      index: 0,
+      delta: { type: "signature_delta", signature: "sig==" },
+    })
+    expect(events[6]).toMatchObject({
+      index: 1,
+      content_block: { type: "tool_use", id: "toolu_1", name: "Bash" },
+    })
+    expect(events[7]).toMatchObject({ index: 1 })
+  })
+
+  test("closes the thinking block before visible text", () => {
+    const streamState = newStreamState()
+    const events = [
+      opusChunk({ reasoning_text: "hmm" }),
+      opusChunk({ content: "No." }),
+    ].flatMap((c) => translateChunkToAnthropicEvents(c, streamState))
+
+    expect(events.slice(1)).toEqual([
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "hmm" },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "No." },
+      },
+    ])
   })
 })

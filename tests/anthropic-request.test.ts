@@ -126,46 +126,71 @@ describe("Anthropic to OpenAI translation logic", () => {
     expect(isValidChatCompletionRequest(openAIPayload)).toBe(false)
   })
 
-  test("should drop thinking blocks from assistant messages (preserve text)", () => {
-    // Thinking blocks have signed-by-Anthropic semantics that Copilot can't
-    // verify. The proxy drops them on the request side rather than promoting
-    // their content to plain text (which would corrupt assistant turn
-    // semantics by exposing the model's private reasoning as visible output).
-    const anthropicPayload: AnthropicMessagesPayload = {
-      model: "claude-3-5-sonnet-20241022",
+  test("keeps a trailing inline system message as user context", () => {
+    // Claude Code sends SessionStart hook context as a trailing
+    // `role: "system"` message. It used to be mistaken for an assistant
+    // prefill and stripped, so the model never saw it.
+    const openAIPayload = translateToOpenAI({
+      model: "claude-opus-5.5",
+      system: "You are Claude Code.",
       messages: [
-        { role: "user", content: "What is 2+2?" },
+        { role: "user", content: "Fix the bug." },
+        { role: "system", content: "SessionStart hook additional context" },
+      ],
+      max_tokens: 100,
+    })
+
+    expect(isValidChatCompletionRequest(openAIPayload)).toBe(true)
+    expect(openAIPayload.messages).toEqual([
+      { role: "system", content: "You are Claude Code." },
+      { role: "user", content: "Fix the bug." },
+      { role: "user", content: "SessionStart hook additional context" },
+    ])
+  })
+
+  test("does not attribute a mid-conversation system message to the assistant", () => {
+    const openAIPayload = translateToOpenAI({
+      model: "claude-opus-5.5",
+      messages: [
+        { role: "user", content: "List files." },
+        {
+          role: "system",
+          content: [{ type: "text", text: "hook context" }],
+        },
         {
           role: "assistant",
           content: [
-            {
-              type: "thinking",
-              thinking: "Let me think about this simple math problem...",
-            },
-            { type: "text", text: "2+2 equals 4." },
+            { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
           ],
         },
-        { role: "user", content: "Thanks." },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_1", content: "a.ts" },
+          ],
+        },
       ],
       max_tokens: 100,
-    }
-    const openAIPayload = translateToOpenAI(anthropicPayload)
-    expect(isValidChatCompletionRequest(openAIPayload)).toBe(true)
+    })
 
-    const assistantMessage = openAIPayload.messages.find(
-      (m) => m.role === "assistant",
-    )
-    // Text block preserved.
-    expect(assistantMessage?.content).toContain("2+2 equals 4.")
-    // Thinking block dropped — must not leak into outgoing payload.
-    expect(JSON.stringify(assistantMessage)).not.toContain(
-      "Let me think about this simple math problem",
-    )
+    expect(openAIPayload.messages.map((m) => m.role)).toEqual([
+      "user",
+      "user",
+      "assistant",
+      "tool",
+    ])
+    expect(openAIPayload.messages[1].content).toBe("hook context")
+    expect(openAIPayload.messages[2].content).toBeNull()
   })
+})
 
-  test("should drop thinking blocks but preserve text and tool calls", () => {
+describe("Prior reasoning round-trip", () => {
+  test("sends signed prior thinking back as reasoning_text/reasoning_opaque", () => {
+    // Opus re-plans from scratch when its earlier reasoning is missing: on
+    // captured Opus 5.5 xhigh tool turns, dropping it cost 3-10x the output
+    // tokens. Copilot issued the signature, so it round-trips as-is.
     const anthropicPayload: AnthropicMessagesPayload = {
-      model: "claude-3-5-sonnet-20241022",
+      model: "claude-opus-5.5",
       messages: [
         { role: "user", content: "What's the weather?" },
         {
@@ -173,8 +198,8 @@ describe("Anthropic to OpenAI translation logic", () => {
           content: [
             {
               type: "thinking",
-              thinking:
-                "I need to call the weather API to get current weather information.",
+              thinking: "I need to call the weather API.",
+              signature: "sig-from-copilot",
             },
             { type: "text", text: "I'll check the weather for you." },
             {
@@ -204,16 +229,67 @@ describe("Anthropic to OpenAI translation logic", () => {
     const assistantMessage = openAIPayload.messages.find(
       (m) => m.role === "assistant",
     )
-    // Thinking block dropped.
-    expect(JSON.stringify(assistantMessage)).not.toContain(
-      "I need to call the weather API",
-    )
-    // Text and tool calls preserved.
-    expect(assistantMessage?.content).toContain(
-      "I'll check the weather for you.",
-    )
-    expect(assistantMessage?.tool_calls).toHaveLength(1)
+    expect(assistantMessage).toMatchObject({
+      content: "I'll check the weather for you.",
+      reasoning_text: "I need to call the weather API.",
+      reasoning_opaque: "sig-from-copilot",
+    })
     expect(assistantMessage?.tool_calls?.[0].function.name).toBe("get_weather")
+  })
+
+  test("never replays unsigned thinking or puts it in visible content", () => {
+    const anthropicPayload: AnthropicMessagesPayload = {
+      model: "claude-opus-5.5",
+      messages: [
+        { role: "user", content: "What is 2+2?" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "Let me think about this simple math problem...",
+            },
+            { type: "text", text: "2+2 equals 4." },
+          ],
+        },
+        { role: "user", content: "Thanks." },
+      ],
+      max_tokens: 100,
+    }
+    const openAIPayload = translateToOpenAI(anthropicPayload)
+    expect(isValidChatCompletionRequest(openAIPayload)).toBe(true)
+
+    const assistantMessage = openAIPayload.messages.find(
+      (m) => m.role === "assistant",
+    )
+    expect(assistantMessage?.content).toBe("2+2 equals 4.")
+    expect(JSON.stringify(assistantMessage)).not.toContain(
+      "Let me think about this simple math problem",
+    )
+  })
+
+  test("keeps the signature when Claude Code omitted the thinking text", () => {
+    // Claude Code asks for display: "omitted"; the block can arrive with an
+    // empty thinking string but a valid signature.
+    const openAIPayload = translateToOpenAI({
+      model: "claude-opus-5.5",
+      messages: [
+        { role: "user", content: "hi" },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "", signature: "sig-only" },
+            { type: "text", text: "hello" },
+          ],
+        },
+        { role: "user", content: "again" },
+      ],
+      max_tokens: 100,
+    })
+
+    const assistantMessage = openAIPayload.messages[1]
+    expect(assistantMessage.reasoning_opaque).toBe("sig-only")
+    expect(assistantMessage).not.toHaveProperty("reasoning_text")
   })
 })
 

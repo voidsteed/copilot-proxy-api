@@ -16,6 +16,62 @@ function isToolBlockOpen(state: AnthropicStreamState): boolean {
   )
 }
 
+function closeOpenBlock(
+  state: AnthropicStreamState,
+  events: Array<AnthropicStreamEventData>,
+): void {
+  if (!state.contentBlockOpen) return
+  events.push({ type: "content_block_stop", index: state.contentBlockIndex })
+  state.contentBlockIndex++
+  state.contentBlockOpen = false
+  state.thinkingBlockOpen = false
+}
+
+function openThinkingBlock(
+  state: AnthropicStreamState,
+  events: Array<AnthropicStreamEventData>,
+): void {
+  if (state.thinkingBlockOpen) return
+  closeOpenBlock(state, events)
+  events.push({
+    type: "content_block_start",
+    index: state.contentBlockIndex,
+    content_block: { type: "thinking", thinking: "" },
+  })
+  state.contentBlockOpen = true
+  state.thinkingBlockOpen = true
+}
+
+/**
+ * Copilot streams Claude's reasoning as `reasoning_text` deltas, then a single
+ * `reasoning_opaque` signature. Forward them as an Anthropic thinking block:
+ * on long high-effort turns this is the only output for minutes, and without
+ * it Claude Code sees a silent stream (pings don't count as progress).
+ */
+function translateReasoningDelta(
+  delta: ChatCompletionChunk["choices"][number]["delta"],
+  state: AnthropicStreamState,
+  events: Array<AnthropicStreamEventData>,
+): void {
+  if (delta.reasoning_text) {
+    openThinkingBlock(state, events)
+    events.push({
+      type: "content_block_delta",
+      index: state.contentBlockIndex,
+      delta: { type: "thinking_delta", thinking: delta.reasoning_text },
+    })
+  }
+
+  if (delta.reasoning_opaque) {
+    openThinkingBlock(state, events)
+    events.push({
+      type: "content_block_delta",
+      index: state.contentBlockIndex,
+      delta: { type: "signature_delta", signature: delta.reasoning_opaque },
+    })
+  }
+}
+
 // eslint-disable-next-line max-lines-per-function, complexity
 export function translateChunkToAnthropicEvents(
   chunk: ChatCompletionChunk,
@@ -57,15 +113,12 @@ export function translateChunkToAnthropicEvents(
     state.messageStartSent = true
   }
 
+  translateReasoningDelta(delta, state, events)
+
   if (delta.content) {
-    if (isToolBlockOpen(state)) {
-      // A tool block was open, so close it before starting a text block.
-      events.push({
-        type: "content_block_stop",
-        index: state.contentBlockIndex,
-      })
-      state.contentBlockIndex++
-      state.contentBlockOpen = false
+    if (isToolBlockOpen(state) || state.thinkingBlockOpen) {
+      // A tool or thinking block was open, so close it before starting text.
+      closeOpenBlock(state, events)
     }
 
     if (!state.contentBlockOpen) {
@@ -93,16 +146,8 @@ export function translateChunkToAnthropicEvents(
   if (delta.tool_calls) {
     for (const toolCall of delta.tool_calls) {
       if (toolCall.id && toolCall.function?.name) {
-        // New tool call starting.
-        if (state.contentBlockOpen) {
-          // Close any previously open block.
-          events.push({
-            type: "content_block_stop",
-            index: state.contentBlockIndex,
-          })
-          state.contentBlockIndex++
-          state.contentBlockOpen = false
-        }
+        // New tool call starting. Close any previously open block.
+        closeOpenBlock(state, events)
 
         const anthropicBlockIndex = state.contentBlockIndex
         state.toolCalls[toolCall.index] = {
@@ -149,6 +194,7 @@ export function translateChunkToAnthropicEvents(
         index: state.contentBlockIndex,
       })
       state.contentBlockOpen = false
+      state.thinkingBlockOpen = false
     }
 
     events.push(

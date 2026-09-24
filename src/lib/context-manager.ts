@@ -256,6 +256,8 @@ function estimateMessageBytes(msg: Message): number {
     }
   }
   if (msg.tool_call_id) bytes += msg.tool_call_id.length + 20
+  if (msg.reasoning_text) bytes += msg.reasoning_text.length + 20
+  if (msg.reasoning_opaque) bytes += msg.reasoning_opaque.length + 20
   return bytes
 }
 

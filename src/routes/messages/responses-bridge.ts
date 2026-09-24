@@ -17,6 +17,7 @@ import type {
   AnthropicUserContentBlock,
 } from "./anthropic-types"
 
+import { inlineSystemText } from "./non-stream-translation"
 import { translateReasoningEffort } from "./reasoning-effort"
 
 interface SSEStream {
@@ -144,8 +145,19 @@ function translateSystem(
 function translateMessage(
   message: AnthropicMessagesPayload["messages"][number],
 ): Array<ResponsesInputItem> {
-  if (message.role === "user") return translateUserMessage(message.content)
-  return translateAssistantMessage(message.content)
+  switch (message.role) {
+    case "user": {
+      return translateUserMessage(message.content)
+    }
+    case "system": {
+      // Mid-conversation system context (see handleInlineSystemMessage).
+      const text = inlineSystemText(message)
+      return text ? [{ role: "user", content: text }] : []
+    }
+    default: {
+      return translateAssistantMessage(message.content)
+    }
+  }
 }
 
 function translateUserMessage(
