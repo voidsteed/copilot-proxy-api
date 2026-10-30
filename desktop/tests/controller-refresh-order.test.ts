@@ -7,13 +7,13 @@ import {
   test,
 } from "bun:test"
 import { build } from "esbuild"
-import { execFileSync } from "node:child_process"
 import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
@@ -31,11 +31,8 @@ let directory = ""
 let runtimePath = ""
 
 beforeAll(async () => {
-  expect(execFileSync("/sbin/mount", { encoding: "utf8" })).toContain(
-    "on /Volumes/mac-ssd (",
-  )
   directory = await mkdtemp(
-    "/Volumes/mac-ssd/AI/projects/copilot-proxy-api--6ce38f64251a/desktop-app/refresh-order-tests-",
+    join(tmpdir(), "copilot-bridge-refresh-order-tests-"),
   )
   runtimePath = join(directory, "engine.cjs")
   await symlink(

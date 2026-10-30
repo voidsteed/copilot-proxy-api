@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { execFileSync } from "node:child_process"
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import type { ControllerOptions } from "../main/types"
 import type { DesktopSnapshot } from "../shared/contracts"
@@ -10,12 +11,7 @@ import { createController } from "../main/controller"
 let directory = ""
 
 beforeAll(async () => {
-  expect(execFileSync("/sbin/mount", { encoding: "utf8" })).toContain(
-    "on /Volumes/mac-ssd (",
-  )
-  directory = await mkdtemp(
-    "/Volumes/mac-ssd/AI/projects/copilot-proxy-api--6ce38f64251a/desktop-app/settings-tests-",
-  )
+  directory = await mkdtemp(join(tmpdir(), "copilot-bridge-settings-tests-"))
 })
 
 afterAll(async () => {

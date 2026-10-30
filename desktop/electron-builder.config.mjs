@@ -6,7 +6,7 @@ const root = import.meta.dirname
 export default {
   appId: "com.voidsteed.copilotbridge",
   productName: "Copilot Bridge",
-  buildVersion: "1",
+  buildVersion: "0.0.1.1",
   directories: {
     output: process.env.COPILOT_BRIDGE_PACKAGE_OUTPUT || "release",
     buildResources: "assets",
@@ -30,6 +30,7 @@ export default {
   npmRebuild: false,
   publish: null,
   mac: {
+    bundleVersion: "1",
     category: "public.app-category.developer-tools",
     icon: "assets/icon.png",
     hardenedRuntime: true,

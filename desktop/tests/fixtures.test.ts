@@ -4,6 +4,7 @@ import { rejects } from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
 import { request as httpRequest } from "node:http"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
@@ -492,10 +493,9 @@ function previewController() {
 }
 
 async function preview() {
-  const testRoot =
-    "/Volumes/mac-ssd/AI/projects/copilot-proxy-api--6ce38f64251a/desktop-app"
-  await mkdir(testRoot, { recursive: true })
-  const directory = await mkdtemp(join(testRoot, "fixtures-tests-"))
+  const directory = await mkdtemp(
+    join(tmpdir(), "copilot-bridge-fixtures-tests-"),
+  )
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   const renderer = join(directory, "renderer")
   await mkdir(renderer)
