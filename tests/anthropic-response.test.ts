@@ -8,7 +8,10 @@ import type {
 
 import { type AnthropicStreamState } from "~/routes/messages/anthropic-types"
 import { translateToAnthropic } from "~/routes/messages/non-stream-translation"
-import { translateChunkToAnthropicEvents } from "~/routes/messages/stream-translation"
+import {
+  finishAnthropicStream,
+  translateChunkToAnthropicEvents,
+} from "~/routes/messages/stream-translation"
 
 const anthropicUsageSchema = z.object({
   input_tokens: z.number().int(),
@@ -274,6 +277,7 @@ describe("OpenAI to Anthropic Streaming Response Translation", () => {
     ]
 
     const streamState: AnthropicStreamState = {
+      completion: { kind: "streaming" },
       messageStartSent: false,
       contentBlockIndex: 0,
       contentBlockOpen: false,
@@ -282,6 +286,7 @@ describe("OpenAI to Anthropic Streaming Response Translation", () => {
     const translatedStream = openAIStream.flatMap((chunk) =>
       translateChunkToAnthropicEvents(chunk, streamState),
     )
+    translatedStream.push(...finishAnthropicStream(streamState))
 
     for (const event of translatedStream) {
       expect(isValidAnthropicStreamEvent(event)).toBe(true)
@@ -374,6 +379,7 @@ describe("OpenAI to Anthropic Streaming Response Translation", () => {
 
     // Streaming translation requires state
     const streamState: AnthropicStreamState = {
+      completion: { kind: "streaming" },
       messageStartSent: false,
       contentBlockIndex: 0,
       contentBlockOpen: false,
@@ -382,6 +388,7 @@ describe("OpenAI to Anthropic Streaming Response Translation", () => {
     const translatedStream = openAIStream.flatMap((chunk) =>
       translateChunkToAnthropicEvents(chunk, streamState),
     )
+    translatedStream.push(...finishAnthropicStream(streamState))
 
     // These tests will fail until the stub is implemented
     for (const event of translatedStream) {
@@ -408,6 +415,7 @@ function opusChunk(
 
 function newStreamState(): AnthropicStreamState {
   return {
+    completion: { kind: "streaming" },
     messageStartSent: false,
     contentBlockIndex: 0,
     contentBlockOpen: false,
@@ -437,6 +445,7 @@ describe("Copilot reasoning stream translation", () => {
       }),
       opusChunk({}, "tool_calls"),
     ].flatMap((c) => translateChunkToAnthropicEvents(c, streamState))
+    events.push(...finishAnthropicStream(streamState))
 
     expect(events.map((e) => e.type)).toEqual([
       "message_start",

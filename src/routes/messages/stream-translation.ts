@@ -79,6 +79,25 @@ export function translateChunkToAnthropicEvents(
 ): Array<AnthropicStreamEventData> {
   const events: Array<AnthropicStreamEventData> = []
 
+  if (state.completion.kind === "complete") return events
+  if (chunk.usage) {
+    state.completion.usage = {
+      input_tokens:
+        chunk.usage.prompt_tokens
+        - (chunk.usage.prompt_tokens_details?.cached_tokens ?? 0),
+      output_tokens: chunk.usage.completion_tokens,
+      ...(chunk.usage.prompt_tokens_details?.cached_tokens !== undefined ?
+        {
+          cache_read_input_tokens:
+            chunk.usage.prompt_tokens_details.cached_tokens,
+        }
+      : {}),
+    }
+  }
+  if (state.completion.kind === "awaiting-usage") {
+    return chunk.usage ? finishAnthropicStream(state) : events
+  }
+
   if (chunk.choices.length === 0) {
     return events
   }
@@ -197,32 +216,38 @@ export function translateChunkToAnthropicEvents(
       state.thinkingBlockOpen = false
     }
 
-    events.push(
-      {
-        type: "message_delta",
-        delta: {
-          stop_reason: mapOpenAIStopReasonToAnthropic(choice.finish_reason),
-          stop_sequence: null,
-        },
-        usage: {
-          input_tokens:
-            (chunk.usage?.prompt_tokens ?? 0)
-            - (chunk.usage?.prompt_tokens_details?.cached_tokens ?? 0),
-          output_tokens: chunk.usage?.completion_tokens ?? 0,
-          ...(chunk.usage?.prompt_tokens_details?.cached_tokens
-            !== undefined && {
-            cache_read_input_tokens:
-              chunk.usage.prompt_tokens_details.cached_tokens,
-          }),
-        },
-      },
-      {
-        type: "message_stop",
-      },
-    )
+    state.completion = {
+      kind: "awaiting-usage",
+      stopReason: mapOpenAIStopReasonToAnthropic(choice.finish_reason),
+      usage: state.completion.usage,
+    }
+    if (chunk.usage) events.push(...finishAnthropicStream(state))
   }
 
   return events
+}
+
+export function finishAnthropicStream(
+  state: AnthropicStreamState,
+): Array<AnthropicStreamEventData> {
+  const completion = state.completion
+  if (completion.kind === "complete") return []
+  if (!state.messageStartSent) {
+    state.completion = { kind: "complete" }
+    return []
+  }
+  if (completion.kind !== "awaiting-usage") {
+    throw new Error("Chat completion stream ended before a finish reason")
+  }
+  state.completion = { kind: "complete" }
+  return [
+    {
+      type: "message_delta",
+      delta: { stop_reason: completion.stopReason, stop_sequence: null },
+      ...(completion.usage ? { usage: completion.usage } : {}),
+    },
+    { type: "message_stop" },
+  ]
 }
 
 export function translateErrorToAnthropicErrorEvent(
