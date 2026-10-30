@@ -234,6 +234,14 @@ export type AnthropicStreamEventData =
 
 // State for streaming translation
 export interface AnthropicStreamState {
+  completion:
+    | { kind: "streaming"; usage?: AnthropicMessageDeltaEvent["usage"] }
+    | {
+        kind: "awaiting-usage"
+        stopReason: AnthropicResponse["stop_reason"]
+        usage?: AnthropicMessageDeltaEvent["usage"]
+      }
+    | { kind: "complete" }
   messageStartSent: boolean
   contentBlockIndex: number
   contentBlockOpen: boolean

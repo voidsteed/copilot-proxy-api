@@ -11,7 +11,8 @@ const COPILOT_VERSION = "0.53.0"
 const EDITOR_PLUGIN_VERSION = `copilot-chat/${COPILOT_VERSION}`
 const USER_AGENT = `GitHubCopilotChat/${COPILOT_VERSION}`
 
-const API_VERSION = "2025-04-01"
+const COPILOT_API_VERSION = "2025-04-01"
+const GITHUB_API_VERSION = "2022-11-28"
 
 export const copilotBaseUrl = (state: State) =>
   state.accountType === "individual" ?
@@ -26,7 +27,7 @@ export const copilotHeaders = (state: State, vision: boolean = false) => {
     "editor-plugin-version": EDITOR_PLUGIN_VERSION,
     "user-agent": USER_AGENT,
     "openai-intent": "conversation-panel",
-    "x-github-api-version": API_VERSION,
+    "x-github-api-version": COPILOT_API_VERSION,
     "x-request-id": randomUUID(),
     "x-vscode-user-agent-library-version": "electron-fetch",
   }
@@ -43,7 +44,7 @@ export const githubHeaders = (state: State) => ({
   "editor-version": `vscode/${state.vsCodeVersion}`,
   "editor-plugin-version": EDITOR_PLUGIN_VERSION,
   "user-agent": USER_AGENT,
-  "x-github-api-version": API_VERSION,
+  "x-github-api-version": GITHUB_API_VERSION,
   "x-vscode-user-agent-library-version": "electron-fetch",
 })
 

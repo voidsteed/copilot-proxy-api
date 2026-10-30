@@ -33,6 +33,7 @@ import {
   translateToOpenAI,
 } from "~/routes/messages/non-stream-translation"
 import {
+  finishAnthropicStream,
   translateChunkToAnthropicEvents,
   translateErrorToAnthropicErrorEvent,
 } from "~/routes/messages/stream-translation"
@@ -664,6 +665,7 @@ describe("translateToOpenAI (trailing assistant prefill stripping)", () => {
 
 function freshState(): AnthropicStreamState {
   return {
+    completion: { kind: "streaming" },
     messageStartSent: false,
     contentBlockIndex: 0,
     contentBlockOpen: false,
@@ -697,12 +699,9 @@ describe("translateChunkToAnthropicEvents", () => {
   })
 
   test("finish_reason emits content_block_stop, message_delta, message_stop", () => {
-    const state: AnthropicStreamState = {
-      messageStartSent: true,
-      contentBlockIndex: 0,
-      contentBlockOpen: true,
-      toolCalls: {},
-    }
+    const state = freshState()
+    state.messageStartSent = true
+    state.contentBlockOpen = true
     const chunk: ChatCompletionChunk = {
       id: "cmpl_x",
       object: "chat.completion.chunk",
@@ -710,7 +709,10 @@ describe("translateChunkToAnthropicEvents", () => {
       model: "x",
       choices: [{ index: 0, delta: {}, finish_reason: "stop", logprobs: null }],
     }
-    const events = translateChunkToAnthropicEvents(chunk, state)
+    const events = [
+      ...translateChunkToAnthropicEvents(chunk, state),
+      ...finishAnthropicStream(state),
+    ]
     expect(events.map((e) => e.type)).toEqual([
       "content_block_stop",
       "message_delta",

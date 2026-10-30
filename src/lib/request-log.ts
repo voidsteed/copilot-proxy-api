@@ -27,7 +27,24 @@ interface RequestLogState extends RequestLogMetadata {
   finished: boolean
   inputTokens?: number
   outputTokens?: number
+  cancelled?: boolean
+  responseStatus?: number
+  releaseAbort?: () => void
+  startedAt: string
   startedAtMs: number
+}
+
+export interface CompletedRequestSummary {
+  method: string
+  path: string
+  model: string | null
+  status: number
+  outcome: "completed" | "failed" | "cancelled"
+  startedAt: string
+  durationMs: number
+  inputTokens: number | null
+  outputTokens: number | null
+  cachedTokens: number | null
 }
 
 interface RequestLogSummary extends RequestLogMetadata {
@@ -48,6 +65,7 @@ interface FinishRequestLogOptions {
   requestState: RequestLogState
   status: number
   writeLog: LogWriter
+  onComplete?: (summary: CompletedRequestSummary) => void
 }
 
 type LogWriter = (line: string) => void
@@ -71,13 +89,17 @@ export function setRequestLogMetadata(
 
 export function createRequestLogMiddleware(
   writeLog: LogWriter = (line) => consola.info(line),
+  onComplete?: (summary: CompletedRequestSummary) => void,
 ): MiddlewareHandler {
   return async (c, next) => {
     const requestState: RequestLogState = {
       finished: false,
+      startedAt: new Date().toISOString(),
       startedAtMs: performance.now(),
     }
     requestLogStates.set(c, requestState)
+    if (onComplete)
+      observeRequestAbort({ c, requestState, writeLog, onComplete })
 
     try {
       await next()
@@ -87,12 +109,14 @@ export function createRequestLogMiddleware(
         requestState,
         status: 500,
         writeLog,
+        onComplete,
         error: error instanceof Error ? error.message : "Unknown error",
       })
       throw error
     }
 
     const response = c.res
+    requestState.responseStatus = response.status
     const contentType = response.headers.get("content-type") ?? ""
     const isEventStream = contentType.includes("text/event-stream")
 
@@ -102,6 +126,7 @@ export function createRequestLogMiddleware(
         requestState,
         status: response.status,
         writeLog,
+        onComplete,
       })
       return
     }
@@ -118,65 +143,104 @@ export function createRequestLogMiddleware(
         requestState,
         status: response.status,
         writeLog,
+        onComplete,
       })
       return
     }
 
-    const observer = new ResponseMetricsObserver(
+    c.res = observeEventStream({
+      c,
       requestState,
+      response,
+      body: response.body,
       contentType,
-      c.req.path === "/v1/responses",
-    )
-    const reader = (response.body as ReadableStream<Uint8Array>).getReader()
-    const observedBody = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try {
-          const result = await reader.read()
-          if (result.done) {
-            observer.finish(true)
-            finishRequestLog({
-              c,
-              requestState,
-              status: response.status,
-              writeLog,
-            })
-            controller.close()
-            return
-          }
+      writeLog,
+      onComplete,
+    })
+  }
+}
 
-          observer.push(result.value)
-          controller.enqueue(result.value)
-        } catch (error) {
-          observer.finish()
+function observeRequestAbort(
+  options: Omit<FinishRequestLogOptions, "status" | "error">,
+): void {
+  const { c, requestState } = options
+  const signal = c.req.raw.signal
+  const abort = () => {
+    requestState.cancelled = true
+    finishRequestLog({ ...options, status: requestState.responseStatus ?? 499 })
+  }
+  requestState.releaseAbort = () => signal.removeEventListener("abort", abort)
+  signal.addEventListener("abort", abort, { once: true })
+  if (signal.aborted) abort()
+}
+
+function observeEventStream(
+  options: Omit<FinishRequestLogOptions, "error" | "status"> & {
+    response: Response
+    body: ReadableStream<Uint8Array>
+    contentType: string
+  },
+): Response {
+  const { c, requestState, response, body, contentType, writeLog, onComplete } =
+    options
+  const observer = new ResponseMetricsObserver(
+    requestState,
+    contentType,
+    c.req.path === "/v1/responses" || c.req.path === "/responses",
+  )
+  const reader = body.getReader()
+  const observedBody = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read()
+        if (result.done) {
+          observer.finish(true)
           finishRequestLog({
             c,
             requestState,
             status: response.status,
             writeLog,
-            error:
-              error instanceof Error ? error.message : "Response stream failed",
+            onComplete,
           })
-          controller.error(error)
+          controller.close()
+          return
         }
-      },
-      async cancel(reason) {
+
+        observer.push(result.value)
+        controller.enqueue(result.value)
+      } catch (error) {
         observer.finish()
         finishRequestLog({
           c,
           requestState,
           status: response.status,
           writeLog,
+          onComplete,
+          error:
+            error instanceof Error ? error.message : "Response stream failed",
         })
-        await reader.cancel(reason)
-      },
-    })
+        controller.error(error)
+      }
+    },
+    async cancel(reason) {
+      requestState.cancelled = true
+      observer.finish()
+      finishRequestLog({
+        c,
+        requestState,
+        status: response.status,
+        writeLog,
+        onComplete,
+      })
+      await reader.cancel(reason)
+    },
+  })
 
-    c.res = new Response(observedBody, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    })
-  }
+  return new Response(observedBody, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  })
 }
 
 export const requestLogMiddleware = createRequestLogMiddleware()
@@ -351,7 +415,13 @@ class ResponseMetricsObserver {
     try {
       const event = JSON.parse(data) as unknown
       mergeResponseMetrics(this.requestState, event)
-      if (this.trackResponsesCompletion) this.observeResponseEvent(event)
+      if (isRecord(event) && event.error)
+        this.requestState.error = "Response stream failed"
+      if (
+        this.trackResponsesCompletion
+        || (isRecord(event) && event.type === "error")
+      )
+        this.observeResponseEvent(event)
     } catch {
       // Ignore malformed or non-JSON SSE data while preserving the stream.
     }
@@ -433,12 +503,44 @@ function mergeUsage(
   if (cached !== undefined) requestState.cachedTokens = cached
 }
 
+function completedSummary(
+  options: FinishRequestLogOptions,
+  durationMs: number,
+): CompletedRequestSummary {
+  const { c, error, requestState, status } = options
+  let outcome: CompletedRequestSummary["outcome"] = "completed"
+  if (requestState.cancelled || c.req.raw.signal.aborted) outcome = "cancelled"
+  else if (status >= 400 || error || requestState.error) outcome = "failed"
+  return {
+    method: c.req.method,
+    path: c.req.path,
+    model: typeof requestState.model === "string" ? requestState.model : null,
+    status,
+    outcome,
+    startedAt: requestState.startedAt,
+    durationMs: durationMs,
+    inputTokens: requestState.inputTokens ?? null,
+    outputTokens: requestState.outputTokens ?? null,
+    cachedTokens: requestState.cachedTokens ?? null,
+  }
+}
+
 function finishRequestLog(options: FinishRequestLogOptions): void {
-  const { c, error, requestState, status, writeLog } = options
+  const { c, error, requestState, status, writeLog, onComplete } = options
   if (requestState.finished) return
   requestState.finished = true
+  requestState.releaseAbort?.()
+  requestState.releaseAbort = undefined
 
   const endedAtMs = performance.now()
+
+  try {
+    onComplete?.(
+      completedSummary(options, endedAtMs - requestState.startedAtMs),
+    )
+  } catch {
+    consola.debug("Request metrics listener failed")
+  }
 
   // Observability must never be able to break request handling. Callers run
   // inside the response-body observer, where a throw would error the stream

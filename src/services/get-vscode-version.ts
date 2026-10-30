@@ -1,5 +1,5 @@
 // GitHub lists VS Code 1.128 as the minimum version for Claude Opus 5.
-const FALLBACK = "1.128.0"
+export const DEFAULT_VSCODE_VERSION = "1.128.0"
 
 export async function getVSCodeVersion() {
   const controller = new AbortController()
@@ -23,12 +23,10 @@ export async function getVSCodeVersion() {
       return match[1]
     }
 
-    return FALLBACK
+    return DEFAULT_VSCODE_VERSION
   } catch {
-    return FALLBACK
+    return DEFAULT_VSCODE_VERSION
   } finally {
     clearTimeout(timeout)
   }
 }
-
-await getVSCodeVersion()
