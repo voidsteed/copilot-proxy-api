@@ -1,0 +1,39 @@
+{
+  "name": "copilot-bridge",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A desktop home for your GitHub Copilot gateway.",
+  "license": "MIT",
+  "author": "Yujun Liu",
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/dev.ts",
+    "package": "electron-builder --config electron-builder.config.mjs",
+    "preview": "node scripts/preview.mjs",
+    "smoke": "node scripts/smoke.ts",
+    "test": "bun test ./tests",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.11",
+    "lucide-react": "^1.64.0",
+    "pdf-parse": "^2.4.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.11",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "45.1.0",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5"
+  }
+}

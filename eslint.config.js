@@ -14,4 +14,29 @@ export default [
       plugins: ["prettier-plugin-packagejson"],
     },
   }),
+
+  {
+    files: ["desktop/renderer/**/*.tsx"],
+    rules: {
+      "max-lines-per-function": [
+        "error",
+        { max: 300, skipBlankLines: true, skipComments: true },
+      ],
+      complexity: "off",
+    },
+  },
+
+  {
+    files: [
+      "desktop/main/index.ts",
+      "desktop/testing/preview-entry.ts",
+      "desktop/testing/live-check.ts",
+    ],
+    rules: { "unicorn/prefer-module": "off" },
+  },
+
+  {
+    files: ["desktop/main/smoke.ts"],
+    rules: { "max-lines-per-function": "off" },
+  },
 ]

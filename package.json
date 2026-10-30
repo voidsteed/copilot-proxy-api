@@ -26,6 +26,13 @@
   ],
   "scripts": {
     "build": "tsdown",
+    "desktop:build": "bun run --cwd desktop build",
+    "desktop:dev": "bun run --cwd desktop dev",
+    "desktop:package": "bun run --cwd desktop package",
+    "desktop:preview": "bun run --cwd desktop preview",
+    "desktop:smoke": "bun run --cwd desktop smoke",
+    "desktop:test": "bun run --cwd desktop test",
+    "desktop:typecheck": "bun run --cwd desktop typecheck",
     "dev": "bun run --watch ./src/main.ts",
     "knip": "knip-bun",
     "lint": "eslint --cache",
@@ -34,10 +41,10 @@
     "prepare": "bunx simple-git-hooks",
     "release": "bun run verify && bumpp && bun publish --access public",
     "start": "NODE_ENV=production bun run ./src/main.ts",
-    "test": "bun test tests/",
+    "test": "bun test ./tests",
     "test:codex": "bun run scripts/codex-smoke.ts",
     "typecheck": "tsc",
-    "verify": "bun run typecheck && bun run lint && bun test tests/"
+    "verify": "bun run typecheck && bun run lint && bun run test"
   },
   "simple-git-hooks": {
     "pre-commit": "bunx lint-staged"
