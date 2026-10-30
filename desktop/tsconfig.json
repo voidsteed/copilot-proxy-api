@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "baseUrl": "..",
+    "paths": { "~/*": ["src/*"] },
+    "types": ["node", "bun", "vite/client"]
+  },
+  "include": ["main", "engine", "shared", "renderer", "testing", "tests", "scripts", "vite.config.ts", "electron-builder.config.mjs"],
+  "exclude": ["node_modules", "dist", "release"]
+}
