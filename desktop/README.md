@@ -18,7 +18,7 @@ The app has five views.
 
 1. Select **Sign in with GitHub** and copy the device code.
 2. Open GitHub from the app and approve the code at `https://github.com/login/device`.
-3. Start the gateway in **Overview**.
+3. Check that the gateway runs in **Overview**. If it is stopped, select **Start gateway**.
 4. Select a model in **Models**, then choose your agent and shell in **Agents**.
 5. Copy the setup commands and run them in your terminal.
 
@@ -52,7 +52,7 @@ bun run desktop:build
 bun run desktop:preview
 ```
 
-The preview and native fixture mode use test credentials and need no GitHub approval. They do not prove live Copilot authentication or inference.
+The preview and native fixture mode use isolated temporary profiles and test credentials. They need no GitHub approval. They do not prove live Copilot authentication or inference.
 
 `COPILOT_BRIDGE_PREVIEW_DATA` sets the preview's data directory. `ELECTRON_CACHE` and `ELECTRON_BUILDER_CACHE` set the Electron cache directories.
 

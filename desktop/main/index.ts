@@ -23,6 +23,7 @@ import { IPC_CHANNELS } from "../shared/contracts"
 import { isolateFixturePort } from "../testing/settings"
 import { startFixtureUpstream } from "../testing/upstream"
 import { createController } from "./controller"
+import { selectDataDirectory } from "./profile"
 import { createCredentialVault } from "./vault"
 
 app.setName("Copilot Bridge")
@@ -35,7 +36,10 @@ function argument(name: string): string | undefined {
 
 const fixtureMode = process.argv.includes("--fixture")
 const smokeOutput = argument("--smoke-output")
-const dataDirectory = argument("--data-dir")
+const dataDirectory = selectDataDirectory({
+  fixture: fixtureMode,
+  explicit: argument("--data-dir"),
+})
 if (dataDirectory) app.setPath("userData", path.resolve(dataDirectory))
 
 let window: BrowserWindow | null = null

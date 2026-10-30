@@ -46,15 +46,6 @@ jobs:
     env:
       CI: "true"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/copilot-bridge/cache/bun
-      ELECTRON_CACHE: ${{ runner.temp }}/copilot-bridge/cache/electron
-      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/copilot-bridge/cache/electron-builder
-      XDG_CACHE_HOME: ${{ runner.temp }}/copilot-bridge/cache/xdg
-      npm_config_cache: ${{ runner.temp }}/copilot-bridge/cache/npm
-      TMPDIR: ${{ runner.temp }}
-      TMP: ${{ runner.temp }}
-      TEMP: ${{ runner.temp }}
-      COPILOT_BRIDGE_PACKAGE_OUTPUT: ${{ runner.temp }}/copilot-bridge/package
     steps:
       - uses: actions/checkout@v4
 
@@ -62,19 +53,34 @@ jobs:
         with:
           node-version: "24"
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.12"
-
-      - name: Put build output in runner temporary storage
+      - name: Put caches and build output in runner temporary storage
         run: |
           node --input-type=module <<'NODE'
           import fs from "node:fs"
           import path from "node:path"
-          const output = path.join(process.env.RUNNER_TEMP, "copilot-bridge", "dist")
+          const runnerTemp = process.env.RUNNER_TEMP
+          const root = path.join(runnerTemp, "copilot-bridge")
+          const environment = {
+            BUN_INSTALL_CACHE_DIR: path.join(root, "cache", "bun"),
+            ELECTRON_CACHE: path.join(root, "cache", "electron"),
+            ELECTRON_BUILDER_CACHE: path.join(root, "cache", "electron-builder"),
+            XDG_CACHE_HOME: path.join(root, "cache", "xdg"),
+            npm_config_cache: path.join(root, "cache", "npm"),
+            TMPDIR: runnerTemp,
+            TMP: runnerTemp,
+            TEMP: runnerTemp,
+            COPILOT_BRIDGE_PACKAGE_OUTPUT: path.join(root, "package"),
+          }
+          const envLines = Object.entries(environment).map(([name, value]) => `${name}=${value}`)
+          fs.appendFileSync(process.env.GITHUB_ENV, envLines.join("\n") + "\n")
+          const output = path.join(root, "dist")
           fs.mkdirSync(output, { recursive: true })
           fs.symlinkSync(output, "desktop/dist", process.platform === "win32" ? "junction" : "dir")
           NODE
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.12"
 
       - name: Install root dependencies without Git hooks
         run: bun install --frozen-lockfile --ignore-scripts
@@ -118,13 +124,13 @@ jobs:
         if: runner.os != 'Linux'
         env:
           COPILOT_BRIDGE_SMOKE_OUTPUT: ${{ runner.temp }}/copilot-bridge/evidence/native
-        run: bun run desktop:smoke
+        run: bun run desktop:smoke -- --default-fixture-profile
 
       - name: Smoke test native app on Linux
         if: runner.os == 'Linux'
         env:
           COPILOT_BRIDGE_SMOKE_OUTPUT: ${{ runner.temp }}/copilot-bridge/evidence/native
-        run: dbus-run-session -- xvfb-run -a bun run desktop:smoke
+        run: dbus-run-session -- xvfb-run -a bun run desktop:smoke -- --default-fixture-profile
 
       - name: Package host architecture and smoke test installed executable
         if: runner.os != 'Linux'

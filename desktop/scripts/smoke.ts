@@ -26,8 +26,9 @@ const packaged = Boolean(process.env.COPILOT_BRIDGE_EXECUTABLE)
 const args = [
   ...(!packaged ? [root] : []),
   "--fixture",
-  "--data-dir",
-  data,
+  ...(process.argv.includes("--default-fixture-profile") ?
+    []
+  : ["--data-dir", data]),
   "--smoke-output",
   output,
   ...(process.env.CI && process.platform === "linux" ? ["--no-sandbox"] : []),
