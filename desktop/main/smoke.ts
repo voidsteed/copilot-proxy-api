@@ -66,8 +66,59 @@ export async function runNativeSmoke(options: {
   }
 
   async function capture(name: string): Promise<void> {
-    const image = await window.webContents.capturePage()
-    await fs.writeFile(path.join(outputDirectory, `${name}.png`), image.toPNG())
+    try {
+      assert(window.isVisible(), `Native window is visible for ${name}`)
+      let painted = false
+      window.webContents.beginFrameSubscription((image) => {
+        if (!image.isEmpty()) painted = true
+      })
+      try {
+        window.webContents.invalidate()
+        await waitFor(`painted frame for ${name}`, () => painted, 10_000)
+      } finally {
+        window.webContents.endFrameSubscription()
+      }
+      const image = await window.webContents.capturePage()
+      assert(!image.isEmpty(), `Native screenshot ${name} is not empty`)
+      const png = image.toPNG()
+      assert(png.length > 0, `Native screenshot ${name} has PNG data`)
+      await fs.writeFile(path.join(outputDirectory, `${name}.png`), png)
+    } catch (error) {
+      const destroyed = window.isDestroyed()
+      const contents = destroyed ? undefined : window.webContents
+      await fs.writeFile(
+        path.join(outputDirectory, `${name}-capture-failure.json`),
+        JSON.stringify(
+          {
+            capture: name,
+            platform: process.platform,
+            electron: process.versions.electron,
+            chromium: process.versions.chrome,
+            error:
+              error instanceof Error ?
+                { name: error.name, message: error.message }
+              : { name: "UnknownError" },
+            window:
+              destroyed ?
+                { destroyed: true }
+              : {
+                  destroyed: false,
+                  bounds: window.getBounds(),
+                  contentBounds: window.getContentBounds(),
+                  visible: window.isVisible(),
+                  minimized: window.isMinimized(),
+                },
+            renderer:
+              !contents || contents.isDestroyed() ?
+                { destroyed: true }
+              : { destroyed: false, loading: contents.isLoading() },
+          },
+          null,
+          2,
+        ) + "\n",
+      )
+      throw error
+    }
   }
 
   try {

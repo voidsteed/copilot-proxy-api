@@ -31,7 +31,9 @@ const args = [
   : ["--data-dir", data]),
   "--smoke-output",
   output,
-  ...(process.env.CI && process.platform === "linux" ? ["--no-sandbox"] : []),
+  ...(process.env.CI && process.platform === "linux" ?
+    ["--no-sandbox", "--disable-gpu"]
+  : []),
 ]
 const environment = { ...process.env }
 delete environment.ELECTRON_RUN_AS_NODE

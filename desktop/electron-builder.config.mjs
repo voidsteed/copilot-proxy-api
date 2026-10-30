@@ -15,14 +15,20 @@ export default {
     {
       from: realpathSync(path.join(root, "dist")),
       to: "dist",
-      filter: ["main.cjs", "preload.cjs", "engine.cjs", "renderer/**"],
+      filter: ["main.cjs", "preload.cjs", "renderer/**"],
     },
     "assets/**",
     "package.json",
   ],
+  extraResources: [
+    {
+      from: realpathSync(path.join(root, "dist")),
+      to: "app.asar.unpacked/dist",
+      filter: ["engine.cjs"],
+    },
+  ],
   asar: true,
   asarUnpack: [
-    "**/engine.cjs",
     "node_modules/pdf-parse/**",
     "node_modules/pdfjs-dist/**",
     "node_modules/@napi-rs/**",

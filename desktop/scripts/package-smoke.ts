@@ -11,20 +11,24 @@ type HostPlatform = "darwin" | "linux" | "win32"
 interface PackageLayout {
   directories: Record<HostArchitecture, string>
   executable: Array<string>
+  resources: Array<string>
 }
 
 const packageLayouts: Record<HostPlatform, PackageLayout> = {
   darwin: {
     directories: { arm64: "mac-arm64", x64: "mac" },
     executable: ["Copilot Bridge.app", "Contents", "MacOS", "Copilot Bridge"],
+    resources: ["Copilot Bridge.app", "Contents", "Resources"],
   },
   linux: {
     directories: { arm64: "linux-arm64-unpacked", x64: "linux-unpacked" },
     executable: ["copilot-bridge"],
+    resources: ["resources"],
   },
   win32: {
     directories: { arm64: "win-arm64-unpacked", x64: "win-unpacked" },
     executable: ["copilot-bridge.exe"],
+    resources: ["resources"],
   },
 }
 
@@ -104,6 +108,17 @@ async function main(): Promise<number> {
     ...layout.executable,
   )
   await fs.access(executable)
+  const engine = path.join(
+    output,
+    layout.directories[architecture],
+    ...layout.resources,
+    "app.asar.unpacked",
+    "dist",
+    "engine.cjs",
+  )
+  await fs.access(engine).catch((cause: unknown) => {
+    throw new Error(`Packaged gateway engine is missing: ${engine}`, { cause })
+  })
   process.stdout.write(`Testing packaged app: ${executable}\n`)
   return runNode({
     args: [path.join(root, "scripts", "smoke.ts")],
