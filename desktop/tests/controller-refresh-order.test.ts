@@ -32,7 +32,7 @@ let runtimePath = ""
 
 beforeAll(async () => {
   directory = await mkdtemp(
-    join(tmpdir(), "copilot-bridge-refresh-order-tests-"),
+    join(tmpdir(), "copilot-proxy-refresh-order-tests-"),
   )
   runtimePath = join(directory, "engine.cjs")
   await symlink(
@@ -198,7 +198,7 @@ async function native(options: { origin: string; runtimePath?: string }) {
     runtimeExecPath: "node",
     fixtureOrigin: options.origin,
     platform: "darwin",
-    version: "0.0.1",
+    version: "0.0.2",
     vault: {
       mode: "session-only",
       load: () => Promise.resolve(stored),
@@ -280,7 +280,7 @@ describe("catalog synchronization", () => {
       }),
     })
     expect(messages.status).toBe(200)
-    expect(await messages.text()).toContain("Copilot Bridge is connected.")
+    expect(await messages.text()).toContain("Copilot Proxy is connected.")
     abort.abort()
     await reader?.cancel().catch(() => undefined)
     await context.controller.dispose()

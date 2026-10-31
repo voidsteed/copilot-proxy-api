@@ -124,7 +124,7 @@ export async function runNativeSmoke(options: {
   try {
     await waitFor("renderer bridge", () =>
       javascript(
-        "Boolean(window.copilotBridge && document.querySelector('[data-testid=sign-in]'))",
+        "Boolean(window.copilotProxy && document.querySelector('[data-testid=sign-in]'))",
       ),
     )
     assert(
@@ -211,7 +211,7 @@ export async function runNativeSmoke(options: {
     await click('[data-testid="open-probe"]')
     await input(
       '[data-testid="probe-prompt"]',
-      "Reply with exactly: Copilot Bridge is connected.",
+      "Reply with exactly: Copilot Proxy is connected.",
     )
     await click('[data-testid="probe-send"]')
     await waitFor(
@@ -220,7 +220,7 @@ export async function runNativeSmoke(options: {
     )
     const probe = controller.snapshot().probe
     assert.equal(probe.kind, "complete")
-    assert.match(probe.text, /Copilot Bridge is connected/)
+    assert.match(probe.text, /Copilot Proxy is connected/)
     checks.push(
       "Rendered test-request form sends through the owned gateway and shows a response",
     )

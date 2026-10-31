@@ -270,14 +270,12 @@ test("buffered chat and Responses include useful replies and observable token us
   expect(responses.status).toBe(200)
   expect(await responses.json()).toMatchObject({
     status: "completed",
-    output_text: "Copilot Bridge is connected.",
+    output_text: "Copilot Proxy is connected.",
     output: [
       {
         type: "message",
         role: "assistant",
-        content: [
-          { type: "output_text", text: "Copilot Bridge is connected." },
-        ],
+        content: [{ type: "output_text", text: "Copilot Proxy is connected." }],
       },
     ],
     usage: {
@@ -333,7 +331,7 @@ test("chat SSE finishes with usage and a DONE marker", async () => {
         chunk.choices.map((choice) => choice.delta.content ?? ""),
       )
       .join(""),
-  ).toBe("Copilot Bridge is connected.")
+  ).toBe("Copilot Proxy is connected.")
   expect(
     chunks.some((chunk) =>
       chunk.choices.some((choice) => choice.finish_reason === "stop"),
@@ -405,7 +403,7 @@ test("Responses SSE keeps every output item ID consistent through completion", a
     input_tokens_details: { cached_tokens: 5 },
   })
   expect(frames.map((frame) => frame.delta ?? "").join("")).toBe(
-    "Copilot Bridge is connected.",
+    "Copilot Proxy is connected.",
   )
 })
 
@@ -450,7 +448,7 @@ test("invalid bodies and unsupported endpoints fail without a successful generat
 function previewController() {
   let state = snapshotSchema.parse({
     revision: 0,
-    version: "0.0.1",
+    version: "0.0.2",
     platform: "darwin",
     fixture: true,
     storageMode: "session-only",
@@ -494,7 +492,7 @@ function previewController() {
 
 async function preview() {
   const directory = await mkdtemp(
-    join(tmpdir(), "copilot-bridge-fixtures-tests-"),
+    join(tmpdir(), "copilot-proxy-fixtures-tests-"),
   )
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   const renderer = join(directory, "renderer")

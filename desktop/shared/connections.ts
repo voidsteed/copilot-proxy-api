@@ -90,11 +90,11 @@ export function createConnectionSnippet(options: ConnectionOptions): string {
     case "codex": {
       const settings = [
         `model=${JSON.stringify(model.id)}`,
-        'model_provider="copilot_bridge"',
-        'model_providers.copilot_bridge.name="Copilot Bridge"',
-        `model_providers.copilot_bridge.base_url=${JSON.stringify(baseUrl)}`,
-        'model_providers.copilot_bridge.env_key="COPILOT_BRIDGE_API_KEY"',
-        'model_providers.copilot_bridge.wire_api="responses"',
+        'model_provider="copilot_proxy"',
+        'model_providers.copilot_proxy.name="Copilot Proxy"',
+        `model_providers.copilot_proxy.base_url=${JSON.stringify(baseUrl)}`,
+        'model_providers.copilot_proxy.env_key="COPILOT_PROXY_API_KEY"',
+        'model_providers.copilot_proxy.wire_api="responses"',
       ]
       if (model.contextWindow) {
         settings.push(
@@ -103,18 +103,18 @@ export function createConnectionSnippet(options: ConnectionOptions): string {
         )
       }
       return [
-        environment("COPILOT_BRIDGE_API_KEY", apiKey, shell),
+        environment("COPILOT_PROXY_API_KEY", apiKey, shell),
         "",
         `codex ${settings.map((setting) => `-c ${quote(setting, shell)}`).join(" ")}`,
       ].join("\n")
     }
     case "opencode": {
       const config = {
-        model: `copilot_bridge/${model.id}`,
+        model: `copilot_proxy/${model.id}`,
         provider: {
-          copilot_bridge: {
+          copilot_proxy: {
             npm: "@ai-sdk/openai-compatible",
-            name: "Copilot Bridge",
+            name: "Copilot Proxy",
             options: { baseURL: baseUrl, apiKey },
             models: {
               [model.id]: {
@@ -141,7 +141,7 @@ export function createConnectionSnippet(options: ConnectionOptions): string {
     case "curl": {
       const usesChat = model.endpoints.includes("/chat/completions")
       const endpoint = `${baseUrl}/${usesChat ? "chat/completions" : "responses"}`
-      const input = "Reply with exactly: Copilot Bridge is connected."
+      const input = "Reply with exactly: Copilot Proxy is connected."
       const payload = JSON.stringify(
         usesChat ?
           { model: model.id, messages: [{ role: "user", content: input }] }

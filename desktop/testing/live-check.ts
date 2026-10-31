@@ -50,7 +50,7 @@ async function createLiveController(
     dataDirectory: directory,
     runtimePath: path.join(__dirname, "engine.cjs"),
     platform: z.enum(["darwin", "win32", "linux"]).parse(process.platform),
-    version: "0.0.1",
+    version: "0.0.2",
     vault: {
       mode: "session-only",
       load: () =>
@@ -73,8 +73,8 @@ async function main(): Promise<void> {
     )
   }
   const output =
-    process.env.COPILOT_BRIDGE_LIVE_OUTPUT
-    || (await fs.mkdtemp(path.join(os.tmpdir(), "copilot-bridge-live-")))
+    process.env.COPILOT_PROXY_LIVE_OUTPUT
+    || (await fs.mkdtemp(path.join(os.tmpdir(), "copilot-proxy-live-")))
   const controller = await createLiveController(output)
   try {
     await waitFor(() => {
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
       kind: "run-probe",
       modelId: model.id,
       prompt:
-        "Reply with exactly this sentence and nothing else: Copilot Bridge is connected.",
+        "Reply with exactly this sentence and nothing else: Copilot Proxy is connected.",
     })
     await waitFor(() =>
       ["complete", "error"].includes(controller.snapshot().probe.kind),
@@ -123,7 +123,7 @@ async function main(): Promise<void> {
     const probe = controller.snapshot().probe
     if (
       probe.kind !== "complete"
-      || !probe.text.includes("Copilot Bridge is connected.")
+      || !probe.text.includes("Copilot Proxy is connected.")
     ) {
       throw new Error(
         "The live model did not return the expected connection response.",

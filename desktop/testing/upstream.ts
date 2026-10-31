@@ -246,12 +246,12 @@ function replyText(prompt: string): string {
   if (addition)
     return `${addition[1]} + ${addition[2]} = ${Number(addition[1]) + Number(addition[2])}.`
   if (/\b(?:what|which)\b.+\b(?:model|fixture)\b/i.test(prompt)) {
-    return "This is the local Copilot Bridge fixture. No live model was contacted."
+    return "This is the local Copilot Proxy fixture. No live model was contacted."
   }
   if (/\b(?:write|show)\b.+\b(?:code|function)\b/i.test(prompt)) {
-    return '```javascript\nfunction connectionStatus() {\n  return "Copilot Bridge is connected."\n}\n```'
+    return '```javascript\nfunction connectionStatus() {\n  return "Copilot Proxy is connected."\n}\n```'
   }
-  return "Copilot Bridge is connected."
+  return "Copilot Proxy is connected."
 }
 
 function quota(id: string, unlimited: boolean) {

@@ -28,4 +28,4 @@ const bridge: DesktopBridge = {
   },
 }
 
-contextBridge.exposeInMainWorld("copilotBridge", bridge)
+contextBridge.exposeInMainWorld("copilotProxy", bridge)

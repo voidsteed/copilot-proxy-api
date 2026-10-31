@@ -43,7 +43,7 @@ let directory = ""
 let runtimePath = ""
 const gatewayKey = "fixture_gateway_key_012345678901234567890123456789"
 beforeAll(async () => {
-  directory = await mkdtemp(join(tmpdir(), "copilot-bridge-runtime-tests-"))
+  directory = await mkdtemp(join(tmpdir(), "copilot-proxy-runtime-tests-"))
   runtimePath = join(directory, "engine.cjs")
   await symlink(
     await realpath(join(root, "desktop/node_modules")),
@@ -185,7 +185,7 @@ async function controller(
     runtimeExecPath: "node",
     fixtureOrigin: upstream.origin,
     platform: "darwin",
-    version: "0.0.1",
+    version: "0.0.2",
     vault: options.vault ?? store.vault,
     writeClipboard: (text) => {
       clipboard.push(text)
@@ -319,7 +319,7 @@ describe("desktop proxy child", () => {
       const reply: unknown = await response.json()
       expect(response.status).toBe(200)
       expect(reply).toHaveProperty(request.expected)
-      expect(JSON.stringify(reply)).toContain("Copilot Bridge is connected.")
+      expect(JSON.stringify(reply)).toContain("Copilot Proxy is connected.")
     }
     await eventually(() => runtime.activity.length === 3)
     expect(
@@ -335,7 +335,7 @@ describe("desktop proxy child", () => {
       "Check the connection",
     )
     expect(JSON.stringify(runtime.activity)).not.toContain(
-      "Copilot Bridge is connected.",
+      "Copilot Proxy is connected.",
     )
     await runtime.process.stop()
     await runtime.process.stop()
@@ -591,7 +591,7 @@ describe("native desktop controller", () => {
     await eventually(() => context.native.snapshot().probe.kind === "complete")
     expect(context.native.snapshot().probe).toMatchObject({
       kind: "complete",
-      text: "Copilot Bridge is connected.",
+      text: "Copilot Proxy is connected.",
     })
     await eventually(() => context.native.snapshot().activity.length === 1)
     expect(context.native.snapshot().totals).toMatchObject({

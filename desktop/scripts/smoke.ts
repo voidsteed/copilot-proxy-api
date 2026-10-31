@@ -17,12 +17,12 @@ function parseReport(raw: string) {
 
 const root = fileURLToPath(new URL("..", import.meta.url))
 const output =
-  process.env.COPILOT_BRIDGE_SMOKE_OUTPUT
-  || (await fs.mkdtemp(path.join(os.tmpdir(), "copilot-bridge-smoke-")))
+  process.env.COPILOT_PROXY_SMOKE_OUTPUT
+  || (await fs.mkdtemp(path.join(os.tmpdir(), "copilot-proxy-smoke-")))
 const data = path.join(output, "user-data")
 await fs.mkdir(output, { recursive: true })
-const executable = process.env.COPILOT_BRIDGE_EXECUTABLE || electronExecutable
-const packaged = Boolean(process.env.COPILOT_BRIDGE_EXECUTABLE)
+const executable = process.env.COPILOT_PROXY_EXECUTABLE || electronExecutable
+const packaged = Boolean(process.env.COPILOT_PROXY_EXECUTABLE)
 const args = [
   ...(!packaged ? [root] : []),
   "--fixture",

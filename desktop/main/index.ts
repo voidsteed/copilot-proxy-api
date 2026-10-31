@@ -26,8 +26,8 @@ import { createController } from "./controller"
 import { selectDataDirectory } from "./profile"
 import { createCredentialVault } from "./vault"
 
-app.setName("Copilot Bridge")
-app.setAppUserModelId("com.voidsteed.copilotbridge")
+app.setName("Copilot Proxy")
+app.setAppUserModelId("com.voidsteed.copilotproxy")
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name)
@@ -66,7 +66,7 @@ function platform(): DesktopSnapshot["platform"] {
       return "linux"
     }
     default: {
-      throw new Error("Copilot Bridge supports macOS, Windows, and Linux.")
+      throw new Error("Copilot Proxy supports macOS, Windows, and Linux.")
     }
   }
 }
@@ -90,7 +90,7 @@ async function applyLoginItem(enabled: boolean): Promise<void> {
     process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
     "autostart",
   )
-  const filename = path.join(directory, "copilot-bridge.desktop")
+  const filename = path.join(directory, "copilot-proxy.desktop")
   if (!enabled) {
     await fs.unlink(filename).catch((error: unknown) => {
       if (
@@ -112,7 +112,7 @@ async function applyLoginItem(enabled: boolean): Promise<void> {
     [
       "[Desktop Entry]",
       "Type=Application",
-      "Name=Copilot Bridge",
+      "Name=Copilot Proxy",
       `Exec="${executable}"`,
       "Terminal=false",
       "X-GNOME-Autostart-enabled=true",
@@ -126,11 +126,11 @@ function updateTray(snapshot: DesktopSnapshot): void {
   if (!tray || tray.isDestroyed()) return
   const running = snapshot.gateway.kind === "running"
   tray.setToolTip(
-    `Copilot Bridge: ${running ? "Gateway running" : "Gateway stopped"}`,
+    `Copilot Proxy: ${running ? "Gateway running" : "Gateway stopped"}`,
   )
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Open Copilot Bridge", click: showWindow },
+      { label: "Open Copilot Proxy", click: showWindow },
       { type: "separator" },
       {
         label: running ? "Stop gateway" : "Start gateway",
@@ -145,7 +145,7 @@ function updateTray(snapshot: DesktopSnapshot): void {
         },
       },
       { type: "separator" },
-      { label: "Quit Copilot Bridge", click: () => app.quit() },
+      { label: "Quit Copilot Proxy", click: () => app.quit() },
     ]),
   )
 }
@@ -211,7 +211,7 @@ async function start(): Promise<void> {
     minWidth: 760,
     minHeight: 600,
     show: false,
-    title: "Copilot Bridge",
+    title: "Copilot Proxy",
     backgroundColor: "#f5f7f8",
     ...(process.platform === "darwin" ?
       {
@@ -348,7 +348,7 @@ if (!app.requestSingleInstanceLock()) {
   void start().catch((error: unknown) => {
     const message =
       error instanceof Error ? error.message : "The app could not start."
-    if (!smokeOutput) dialog.showErrorBox("Copilot Bridge", message)
+    if (!smokeOutput) dialog.showErrorBox("Copilot Proxy", message)
     markFailure()
     app.quit()
   })

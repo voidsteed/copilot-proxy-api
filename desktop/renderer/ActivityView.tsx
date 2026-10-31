@@ -113,7 +113,7 @@ export function ActivityView({
             title="No requests yet"
             action={<Button onClick={onTest}>Send a test request</Button>}
           >
-            Completed requests appear here while Copilot Bridge is open.
+            Completed requests appear here while Copilot Proxy is open.
           </EmptyState>
         )}
         {snapshot.activity.length > 0 && filtered.length === 0 && (

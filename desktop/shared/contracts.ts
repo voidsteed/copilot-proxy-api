@@ -198,7 +198,7 @@ export interface DesktopBridge {
 }
 
 export const IPC_CHANNELS = {
-  snapshot: "copilot-bridge:snapshot",
-  command: "copilot-bridge:command",
-  update: "copilot-bridge:update",
+  snapshot: "copilot-proxy:snapshot",
+  command: "copilot-proxy:command",
+  update: "copilot-proxy:update",
 } as const

@@ -1,8 +1,8 @@
-# Copilot Bridge
+# Copilot Proxy
 
-Copilot Bridge is a desktop app for one GitHub Copilot account. It runs a local gateway and prepares terminal commands for Claude Code, Codex, OpenCode, and HTTP clients. The installed app includes Electron and Node. Users do not need Bun or Node.
+Copilot Proxy is a desktop app for one GitHub Copilot account. It runs a local gateway and prepares terminal commands for Claude Code, Codex, OpenCode, and HTTP clients. The installed app includes Electron and Node. Users do not need Bun or Node.
 
-The desktop version is **0.0.1 build 1**. The CLI keeps its separate **0.10.32** release history.
+The desktop version is **0.0.2 build 2**. The CLI keeps its separate **0.10.32** release history.
 
 The app has five views.
 
@@ -54,7 +54,7 @@ bun run desktop:preview
 
 The preview and native fixture mode use isolated temporary profiles and test credentials. They need no GitHub approval. They do not prove live Copilot authentication or inference.
 
-`COPILOT_BRIDGE_PREVIEW_DATA` sets the preview's data directory. `ELECTRON_CACHE` and `ELECTRON_BUILDER_CACHE` set the Electron cache directories.
+`COPILOT_PROXY_PREVIEW_DATA` sets the preview's data directory. `ELECTRON_CACHE` and `ELECTRON_BUILDER_CACHE` set the Electron cache directories.
 
 ## Verify the app
 
@@ -78,7 +78,7 @@ node desktop/dist/live-check.cjs --use-cli-sign-in
 
 The native smoke launches the Electron window, exercises fixture UI workflows, makes local gateway requests, and checks shutdown. The package smoke builds an unsigned app directory for the host architecture and runs the same workflows through its executable. Each smoke run reports its evidence directory. `smoke.json`, screenshots, and `electron.log` record the result.
 
-`COPILOT_BRIDGE_PACKAGE_OUTPUT` sets the package directory. `COPILOT_BRIDGE_SMOKE_OUTPUT` sets the smoke evidence directory. Without these variables, the scripts use temporary storage. The package smoke does not copy artifacts into the source tree. On Linux, run the two smoke commands inside `xvfb-run -a` when no graphical session is available.
+`COPILOT_PROXY_PACKAGE_OUTPUT` sets the package directory. `COPILOT_PROXY_SMOKE_OUTPUT` sets the smoke evidence directory. Without these variables, the scripts use temporary storage. The package smoke does not copy artifacts into the source tree. On Linux, run the two smoke commands inside `xvfb-run -a` when no graphical session is available.
 
 The [desktop workflow](../.github/workflows/desktop.yml) runs native jobs on macOS, Windows, and Linux. It uploads fixture evidence and unsigned self-contained app archives. Each job builds only its host architecture. Signing and publishing are disabled.
 

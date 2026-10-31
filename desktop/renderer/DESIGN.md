@@ -1,4 +1,4 @@
-# Copilot Bridge renderer
+# Copilot Proxy renderer
 
 This document explains the renderer design. The native controller remains the sole owner of account state, credentials, settings, and gateway lifecycle.
 

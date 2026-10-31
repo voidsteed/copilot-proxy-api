@@ -1,6 +1,6 @@
 # Desktop feature map
 
-The desktop app has its own version, starting at 0.0.1. The existing CLI keeps its release history.
+The desktop app is version 0.0.2. Its separate release history started at 0.0.1. The existing CLI keeps its release history.
 
 | Feature | Expected behavior | Verification |
 | --- | --- | --- |

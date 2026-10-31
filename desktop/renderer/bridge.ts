@@ -8,7 +8,7 @@ import {
 } from "../shared/contracts"
 
 declare global {
-  var copilotBridge: DesktopBridge | undefined
+  var copilotProxy: DesktopBridge | undefined
 }
 
 type SnapshotState =
@@ -32,7 +32,7 @@ export function errorMessage(error: unknown): string {
 }
 
 function createRendererBridge(): RendererBridge {
-  const native = globalThis.copilotBridge
+  const native = globalThis.copilotProxy
   const errorListeners = new Set<(message: string) => void>()
   const reportError = (error: unknown) => {
     const message = errorMessage(error)

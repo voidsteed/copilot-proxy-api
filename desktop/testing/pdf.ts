@@ -5,7 +5,7 @@ export function fixturePdf(): Buffer {
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
   ]
-  const content = "BT /F1 16 Tf 30 100 Td (Copilot Bridge PDF check.) Tj ET\n"
+  const content = "BT /F1 16 Tf 30 100 Td (Copilot Proxy PDF check.) Tj ET\n"
   objects.push(
     `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}endstream`,
   )

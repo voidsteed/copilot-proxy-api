@@ -500,4 +500,4 @@ bun run start
 
 ## Desktop app
 
-[Copilot Bridge](desktop/README.md) is the separately versioned desktop companion for macOS, Windows, and Linux. It provides GitHub sign-in, a keyed local gateway, models, usage, activity, and setup commands for coding agents. The desktop app starts at version 0.0.1.
+[Copilot Proxy](desktop/README.md) is the separately versioned desktop companion for macOS, Windows, and Linux. It provides GitHub sign-in, a keyed local gateway, models, usage, activity, and setup commands for coding agents. The desktop app is version 0.0.2.

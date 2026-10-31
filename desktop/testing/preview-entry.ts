@@ -48,28 +48,28 @@ async function copy(text: string): Promise<void> {
 
 async function main(): Promise<void> {
   const directory =
-    process.env.COPILOT_BRIDGE_PREVIEW_DATA
-    || (await fs.mkdtemp(path.join(os.tmpdir(), "copilot-bridge-preview-")))
+    process.env.COPILOT_PROXY_PREVIEW_DATA
+    || (await fs.mkdtemp(path.join(os.tmpdir(), "copilot-proxy-preview-")))
   const fixture = await startFixtureUpstream()
   const controller = await createController({
     dataDirectory: directory,
     runtimePath: path.join(__dirname, "engine.cjs"),
     fixtureOrigin: fixture.origin,
     platform: hostPlatform(),
-    version: "0.0.1",
+    version: "0.0.2",
     vault: createCredentialVault({ directory, encryption: null }),
     writeClipboard: copy,
     openExternal: () => Promise.resolve(),
     applyLoginItem: () => Promise.resolve(),
   })
   await isolateFixturePort(controller)
-  const port = Number(process.env.COPILOT_BRIDGE_PREVIEW_PORT || "5174")
+  const port = Number(process.env.COPILOT_PROXY_PREVIEW_PORT || "5174")
   const server = await startPreviewServer({
     controller,
     rendererDirectory: path.join(__dirname, "renderer"),
     port,
   })
-  process.stdout.write(`Copilot Bridge fixture preview: ${server.origin}\n`)
+  process.stdout.write(`Copilot Proxy fixture preview: ${server.origin}\n`)
   let closing = false
   const close = async () => {
     if (closing) return

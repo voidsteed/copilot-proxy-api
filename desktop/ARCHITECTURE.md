@@ -1,8 +1,8 @@
 # Desktop architecture
 
-Copilot Bridge gives a Copilot subscriber a local gateway and agent setup in one desktop app. The sandboxed renderer presents safe snapshots. Electron main owns settings, GitHub device login, encrypted persistence, clipboard actions, and the lifetime of one proxy child. That child owns the existing process-wide proxy state and protocol handlers.
+Copilot Proxy gives a Copilot subscriber a local gateway and agent setup in one desktop app. The sandboxed renderer presents safe snapshots. Electron main owns settings, GitHub device login, encrypted persistence, clipboard actions, and the lifetime of one proxy child. That child owns the existing process-wide proxy state and protocol handlers.
 
-The app bundles Electron's Node runtime. Users do not install Bun or Node. The desktop package starts at 0.0.1 and does not change the CLI's release history.
+The app bundles Electron's Node runtime. Users do not install Bun or Node. The desktop package is version 0.0.2 and does not change the CLI's release history.
 
 ## Runtime choice
 

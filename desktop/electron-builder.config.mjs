@@ -4,11 +4,11 @@ import path from "node:path"
 const root = import.meta.dirname
 
 export default {
-  appId: "com.voidsteed.copilotbridge",
-  productName: "Copilot Bridge",
-  buildVersion: "0.0.1.1",
+  appId: "com.voidsteed.copilotproxy",
+  productName: "Copilot Proxy",
+  buildVersion: "0.0.2.2",
   directories: {
-    output: process.env.COPILOT_BRIDGE_PACKAGE_OUTPUT || "release",
+    output: process.env.COPILOT_PROXY_PACKAGE_OUTPUT || "release",
     buildResources: "assets",
   },
   files: [
@@ -36,7 +36,7 @@ export default {
   npmRebuild: false,
   publish: null,
   mac: {
-    bundleVersion: "1",
+    bundleVersion: "2",
     category: "public.app-category.developer-tools",
     icon: "assets/icon.png",
     hardenedRuntime: true,
@@ -47,7 +47,7 @@ export default {
   },
   win: {
     icon: "assets/icon.png",
-    executableName: "copilot-bridge",
+    executableName: "copilot-proxy",
     target: [{ target: "nsis", arch: ["x64"] }],
   },
   nsis: {
@@ -58,7 +58,7 @@ export default {
   linux: {
     icon: "assets/icon.png",
     category: "Development",
-    executableName: "copilot-bridge",
+    executableName: "copilot-proxy",
     target: [
       { target: "AppImage", arch: ["x64", "arm64"] },
       { target: "deb", arch: ["x64", "arm64"] },

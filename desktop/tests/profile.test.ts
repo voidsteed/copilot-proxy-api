@@ -21,7 +21,7 @@ test.each([false, true])(
 
 test("default fixture sign-out preserves a previous production profile and each launch is isolated", async () => {
   const production = await fs.mkdtemp(
-    path.join(os.tmpdir(), "copilot-bridge-profile-test-"),
+    path.join(os.tmpdir(), "copilot-proxy-profile-test-"),
   )
   const saved = path.join(production, "credentials.enc")
   const original = Buffer.from("opaque_saved_profile_bytes_for_isolation")

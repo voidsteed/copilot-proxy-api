@@ -8,6 +8,6 @@ export function selectDataDirectory(options: {
 }): string | undefined {
   if (options.explicit) return path.resolve(options.explicit)
   if (options.fixture)
-    return mkdtempSync(path.join(tmpdir(), "copilot-bridge-fixture-"))
+    return mkdtempSync(path.join(tmpdir(), "copilot-proxy-fixture-"))
   return undefined
 }

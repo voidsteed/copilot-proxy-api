@@ -32,7 +32,7 @@ afterEach(async () => {
 })
 
 async function temporaryDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "copilot-bridge-vault-"))
+  const directory = await mkdtemp(join(tmpdir(), "copilot-proxy-vault-"))
   directories.push(directory)
   return directory
 }

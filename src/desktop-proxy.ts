@@ -57,7 +57,7 @@ export function createDesktopProxy(options: {
     await next()
   })
   app.use(createRequestLogMiddleware(() => undefined, options.onComplete))
-  app.get("/", (c) => c.json({ service: "Copilot Bridge" }))
+  app.get("/", (c) => c.json({ service: "Copilot Proxy" }))
   for (const prefix of ["", "/v1"]) {
     app.route(`${prefix}/models`, modelRoutes)
     app.route(`${prefix}/chat/completions`, completionRoutes)

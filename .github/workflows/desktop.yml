@@ -59,7 +59,7 @@ jobs:
           import fs from "node:fs"
           import path from "node:path"
           const runnerTemp = process.env.RUNNER_TEMP
-          const root = path.join(runnerTemp, "copilot-bridge")
+          const root = path.join(runnerTemp, "copilot-proxy")
           const environment = {
             BUN_INSTALL_CACHE_DIR: path.join(root, "cache", "bun"),
             ELECTRON_CACHE: path.join(root, "cache", "electron"),
@@ -69,7 +69,7 @@ jobs:
             TMPDIR: runnerTemp,
             TMP: runnerTemp,
             TEMP: runnerTemp,
-            COPILOT_BRIDGE_PACKAGE_OUTPUT: path.join(root, "package"),
+            COPILOT_PROXY_PACKAGE_OUTPUT: path.join(root, "package"),
           }
           const envLines = Object.entries(environment).map(([name, value]) => `${name}=${value}`)
           fs.appendFileSync(process.env.GITHUB_ENV, envLines.join("\n") + "\n")
@@ -123,25 +123,25 @@ jobs:
       - name: Smoke test native app
         if: runner.os != 'Linux'
         env:
-          COPILOT_BRIDGE_SMOKE_OUTPUT: ${{ runner.temp }}/copilot-bridge/evidence/native
+          COPILOT_PROXY_SMOKE_OUTPUT: ${{ runner.temp }}/copilot-proxy/evidence/native
         run: bun run desktop:smoke -- --default-fixture-profile
 
       - name: Smoke test native app on Linux
         if: runner.os == 'Linux'
         env:
-          COPILOT_BRIDGE_SMOKE_OUTPUT: ${{ runner.temp }}/copilot-bridge/evidence/native
+          COPILOT_PROXY_SMOKE_OUTPUT: ${{ runner.temp }}/copilot-proxy/evidence/native
         run: dbus-run-session -- xvfb-run -a bun run desktop:smoke -- --default-fixture-profile
 
       - name: Package host architecture and smoke test installed executable
         if: runner.os != 'Linux'
         env:
-          COPILOT_BRIDGE_SMOKE_OUTPUT: ${{ runner.temp }}/copilot-bridge/evidence/packaged
+          COPILOT_PROXY_SMOKE_OUTPUT: ${{ runner.temp }}/copilot-proxy/evidence/packaged
         run: node desktop/scripts/package-smoke.ts
 
       - name: Package host architecture and smoke test installed executable on Linux
         if: runner.os == 'Linux'
         env:
-          COPILOT_BRIDGE_SMOKE_OUTPUT: ${{ runner.temp }}/copilot-bridge/evidence/packaged
+          COPILOT_PROXY_SMOKE_OUTPUT: ${{ runner.temp }}/copilot-proxy/evidence/packaged
         run: dbus-run-session -- xvfb-run -a node desktop/scripts/package-smoke.ts
 
       - name: Archive unsigned self-contained app
@@ -149,26 +149,26 @@ jobs:
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process"
           import path from "node:path"
-          const archive = path.join(process.env.RUNNER_TEMP, "copilot-bridge", "Copilot-Bridge-unsigned.tar.gz")
+          const archive = path.join(process.env.RUNNER_TEMP, "copilot-proxy", "Copilot-Proxy-unsigned.tar.gz")
           const tar = process.platform === "win32"
             ? path.join(process.env.SystemRoot, "System32", "tar.exe")
             : "tar"
-          execFileSync(tar, ["-czf", archive, "-C", process.env.COPILOT_BRIDGE_PACKAGE_OUTPUT, "."], { stdio: "inherit" })
+          execFileSync(tar, ["-czf", archive, "-C", process.env.COPILOT_PROXY_PACKAGE_OUTPUT, "."], { stdio: "inherit" })
           NODE
 
       - name: Upload native evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: copilot-bridge-${{ runner.os }}-${{ runner.arch }}-evidence
-          path: ${{ runner.temp }}/copilot-bridge/evidence
+          name: copilot-proxy-${{ runner.os }}-${{ runner.arch }}-evidence
+          path: ${{ runner.temp }}/copilot-proxy/evidence
           if-no-files-found: warn
           retention-days: 14
 
       - name: Upload unsigned app
         uses: actions/upload-artifact@v4
         with:
-          name: copilot-bridge-${{ runner.os }}-${{ runner.arch }}-unsigned
-          path: ${{ runner.temp }}/copilot-bridge/Copilot-Bridge-unsigned.tar.gz
+          name: copilot-proxy-${{ runner.os }}-${{ runner.arch }}-unsigned
+          path: ${{ runner.temp }}/copilot-proxy/Copilot-Proxy-unsigned.tar.gz
           if-no-files-found: error
           retention-days: 14

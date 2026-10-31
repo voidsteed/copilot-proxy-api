@@ -11,7 +11,7 @@ import { createController } from "../main/controller"
 let directory = ""
 
 beforeAll(async () => {
-  directory = await mkdtemp(join(tmpdir(), "copilot-bridge-settings-tests-"))
+  directory = await mkdtemp(join(tmpdir(), "copilot-proxy-settings-tests-"))
 })
 
 afterAll(async () => {
@@ -29,7 +29,7 @@ function controller(
     platform,
     dataDirectory,
     runtimePath: "unused-until-authenticated",
-    version: "0.0.1",
+    version: "0.0.2",
     vault: {
       mode: "session-only",
       load: () => Promise.resolve(null),

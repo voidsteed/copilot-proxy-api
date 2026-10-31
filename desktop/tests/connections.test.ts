@@ -44,7 +44,7 @@ claude() {
   record claude "$ANTHROPIC_BASE_URL" "$ANTHROPIC_AUTH_TOKEN" "$ANTHROPIC_MODEL" \
     "$CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "$DISABLE_NON_ESSENTIAL_MODEL_CALLS" "$@"
 }
-codex() { record codex "$COPILOT_BRIDGE_API_KEY" "$@"; }
+codex() { record codex "$COPILOT_PROXY_API_KEY" "$@"; }
 opencode() { record opencode "$OPENCODE_CONFIG_CONTENT" "$@"; }
 curl() { record curl "$@"; }
 `
@@ -100,12 +100,12 @@ describe.skipIf(!posixShell)("executable POSIX connection snippets", () => {
     const config: unknown = Bun.TOML.parse(overrides.join("\n"))
     expect(config).toEqual({
       model: modelId,
-      model_provider: "copilot_bridge",
+      model_provider: "copilot_proxy",
       model_providers: {
-        copilot_bridge: {
-          name: "Copilot Bridge",
+        copilot_proxy: {
+          name: "Copilot Proxy",
           base_url: "http://127.0.0.1:43219/v1",
-          env_key: "COPILOT_BRIDGE_API_KEY",
+          env_key: "COPILOT_PROXY_API_KEY",
           wire_api: "responses",
         },
       },
@@ -120,11 +120,11 @@ describe.skipIf(!posixShell)("executable POSIX connection snippets", () => {
     expect(args).toEqual([])
     const parsed: unknown = JSON.parse(config)
     expect(parsed).toEqual({
-      model: `copilot_bridge/${modelId}`,
+      model: `copilot_proxy/${modelId}`,
       provider: {
-        copilot_bridge: {
+        copilot_proxy: {
           npm: "@ai-sdk/openai-compatible",
-          name: "Copilot Bridge",
+          name: "Copilot Proxy",
           options: { baseURL: "http://127.0.0.1:43219/v1", apiKey },
           models: {
             [modelId]: {

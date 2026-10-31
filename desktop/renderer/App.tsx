@@ -87,7 +87,7 @@ export function App() {
 
   return (
     <div
-      className={`app-shell ${snapshot?.platform === "darwin" && globalThis.copilotBridge ? "native-mac" : ""}`}
+      className={`app-shell ${snapshot?.platform === "darwin" && globalThis.copilotProxy ? "native-mac" : ""}`}
     >
       <Sidebar
         snapshot={snapshot}
@@ -220,13 +220,13 @@ export function App() {
             {desktop.state.kind === "loading" && (
               <div className="app-loading" role="status">
                 <LoaderCircle className="spin" size={24} strokeWidth={1.5} />
-                <p>Connecting to Copilot Bridge…</p>
+                <p>Connecting to Copilot Proxy…</p>
               </div>
             )}
             {desktop.state.kind === "unavailable" && (
               <EmptyState
                 icon={Network}
-                title="Copilot Bridge is unavailable"
+                title="Copilot Proxy is unavailable"
                 action={
                   <Button
                     icon={RefreshCw}
@@ -441,7 +441,7 @@ function Sidebar({
           <Network size={20} strokeWidth={1.9} />
         </div>
         <div className="brand-name">
-          Copilot Bridge<span>Local gateway</span>
+          Copilot Proxy<span>Local gateway</span>
         </div>
       </div>
       <nav className="sidebar-nav" aria-label="Main navigation">
@@ -505,7 +505,7 @@ function Sidebar({
         }
         <div className="sidebar-version">
           <span className="version-dot" />
-          Copilot Bridge {snapshot?.version ?? ""}
+          Copilot Proxy {snapshot?.version ?? ""}
         </div>
       </div>
     </aside>
