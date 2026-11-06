@@ -1,4 +1,5 @@
 import type { ModelsResponse } from "../../src/services/copilot/get-models"
+import type { DrainResult } from "./runtime"
 
 import { engineCommandSchema, type EngineEvent } from "./protocol"
 import { mapUpstreamUrl, UpstreamError } from "./upstream"
@@ -6,8 +7,15 @@ import { mapUpstreamUrl, UpstreamError } from "./upstream"
 let initialized = false
 let stopping = false
 let runtime:
-  | { stop(): Promise<void>; updateModels(models: ModelsResponse): void }
+  | {
+      stop(): Promise<DrainResult>
+      drain(timeoutMs: number): Promise<DrainResult>
+      resume(): void
+      updateModels(models: ModelsResponse): void
+    }
   | undefined
+let initialization: Promise<void> | undefined
+let orphanedStop: Promise<void> | undefined
 
 function send(event: EngineEvent): void {
   if (process.connected) process.send?.(event, () => undefined)
@@ -26,21 +34,27 @@ function startupErrorCode(
 async function stop(): Promise<void> {
   if (stopping) return
   stopping = true
-  const deadline = setTimeout(() => process.exit(0), 1200)
-  deadline.unref()
+  await initialization
   await runtime?.stop()
   if (!process.connected) process.exit(0)
   send({ kind: "stopped" })
 }
 
+function stopOrphan(): void {
+  orphanedStop ??= (async () => {
+    await stop()
+    process.exit(0)
+  })()
+}
+
 process.on("disconnect", () => {
-  void stop()
+  stopOrphan()
 })
 process.on("SIGTERM", () => {
-  void stop()
+  stopOrphan()
 })
 process.on("SIGINT", () => {
-  void stop()
+  stopOrphan()
 })
 process.on("uncaughtException", () => {
   send({ kind: "error", code: "startup" })
@@ -60,6 +74,22 @@ process.on("message", (input: unknown) => {
   if (parsed.data.kind === "exit") {
     if (stopping) process.exit(0)
     else void stop()
+    return
+  }
+  if (parsed.data.kind === "drain") {
+    const command = parsed.data
+    void runtime?.drain(command.timeoutMs).then((result) => {
+      send(
+        result.kind === "drained" ?
+          { kind: "drained", id: command.id, inFlight: 0 }
+        : { kind: "drain-timeout", id: command.id, inFlight: result.inFlight },
+      )
+    })
+    return
+  }
+  if (parsed.data.kind === "resume") {
+    runtime?.resume()
+    send({ kind: "resumed", id: parsed.data.id })
     return
   }
   if (parsed.data.kind === "catalog") {
@@ -95,15 +125,15 @@ process.on("message", (input: unknown) => {
       originalFetch,
     )
   }
-  void import("./runtime")
+  initialization = import("./runtime")
     .then(({ startEngine }) => startEngine(init, send))
     .then((started) => {
       runtime = started
-      if (stopping) return started.stop()
     })
     .catch((error: unknown) => {
       send({ kind: "error", code: startupErrorCode(error) })
-      void stop()
+      send({ kind: "stopped" })
+      if (!process.connected) process.exit(0)
     })
 })
 

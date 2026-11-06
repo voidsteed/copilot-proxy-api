@@ -15,16 +15,26 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import originalFs from "original-fs"
 
+import type { NativePackageFileSystem } from "../../src/lib/proxy-session"
 import type { DesktopSnapshot } from "../shared/contracts"
 import type { DesktopController } from "./types"
 
+import {
+  hostProxySession,
+  nativeControlCapability,
+  nativePackageFingerprint,
+  proxyStateDirectory,
+} from "../../src/lib/proxy-session"
 import { IPC_CHANNELS } from "../shared/contracts"
 import { isolateFixturePort } from "../testing/settings"
 import { startFixtureUpstream } from "../testing/upstream"
 import { createController } from "./controller"
 import { selectDataDirectory } from "./profile"
 import { createCredentialVault } from "./vault"
+
+const packageFileSystem = originalFs.promises satisfies NativePackageFileSystem
 
 app.setName("Copilot Proxy")
 app.setAppUserModelId("com.voidsteed.copilotproxy")
@@ -35,17 +45,26 @@ function argument(name: string): string | undefined {
 }
 
 const fixtureMode = process.argv.includes("--fixture")
+const backgroundMode = process.argv.includes("--background")
 const smokeOutput = argument("--smoke-output")
+const vaultSmokeOutput = argument("--vault-smoke-output")
 const dataDirectory = selectDataDirectory({
   fixture: fixtureMode,
-  explicit: argument("--data-dir"),
+  explicit: argument("--data-dir") || process.env.COPILOT_PROXY_DATA_DIR,
 })
 if (dataDirectory) app.setPath("userData", path.resolve(dataDirectory))
+const nativeStateDirectory =
+  argument("--state-dir")
+  || process.env.COPILOT_PROXY_STATE_DIR
+  || (fixtureMode ?
+    path.join(app.getPath("userData"), "native")
+  : proxyStateDirectory(os.homedir()))
 
 let window: BrowserWindow | null = null
 let tray: Tray | null = null
 let controller: DesktopController | null = null
 let stopFixture: (() => Promise<void>) | undefined
+let stopControl: (() => Promise<void>) | undefined
 let shuttingDown = false
 let allowQuit = false
 let exitStatus = 0
@@ -136,8 +155,10 @@ function updateTray(snapshot: DesktopSnapshot): void {
         label: running ? "Stop gateway" : "Start gateway",
         enabled:
           snapshot.account.kind === "signed-in"
+          && snapshot.source.kind !== "legacy-cli"
           && snapshot.gateway.kind !== "starting"
-          && snapshot.gateway.kind !== "stopping",
+          && snapshot.gateway.kind !== "stopping"
+          && snapshot.gateway.kind !== "draining",
         click: () => {
           void controller?.invoke({
             kind: running ? "stop-gateway" : "start-gateway",
@@ -150,15 +171,44 @@ function updateTray(snapshot: DesktopSnapshot): void {
   )
 }
 
+type VaultEncryption = NonNullable<
+  Parameters<typeof createCredentialVault>[0]["encryption"]
+>
+
+function nativeEncryptionPolicy(): VaultEncryption | null {
+  if (
+    fixtureMode
+    || (process.platform === "linux"
+      && safeStorage.getSelectedStorageBackend() === "basic_text")
+  )
+    return null
+
+  async function requireDurableEncryption(): Promise<void> {
+    if (
+      !(await safeStorage.isAsyncEncryptionAvailable())
+      || (process.platform === "linux"
+        && safeStorage.getSelectedStorageBackend() === "basic_text")
+    )
+      throw new Error("Secure credential storage is unavailable.")
+  }
+
+  return {
+    async encrypt(value) {
+      await requireDurableEncryption()
+      return safeStorage.encryptStringAsync(value)
+    },
+    async decrypt(value) {
+      await requireDurableEncryption()
+      return safeStorage.decryptStringAsync(value)
+    },
+  }
+}
+
 async function createNativeController(): Promise<DesktopController> {
   const fixture = fixtureMode ? await startFixtureUpstream() : null
   if (fixture) stopFixture = () => fixture.close()
-  const storageAvailable =
-    !fixtureMode
-    && (await safeStorage.isAsyncEncryptionAvailable())
-    && (process.platform !== "linux"
-      || safeStorage.getSelectedStorageBackend() !== "basic_text")
   const directory = app.getPath("userData")
+  const homeDirectory = fixtureMode ? directory : os.homedir()
   const runtimePath =
     app.isPackaged ?
       path.join(
@@ -170,6 +220,8 @@ async function createNativeController(): Promise<DesktopController> {
     : path.join(__dirname, "engine.cjs")
   const companion = await createController({
     dataDirectory: directory,
+    homeDirectory: fixtureMode ? undefined : homeDirectory,
+    stateDirectory: nativeStateDirectory,
     runtimePath,
     runtimeExecPath: process.execPath,
     fixtureOrigin: fixture?.origin,
@@ -177,13 +229,7 @@ async function createNativeController(): Promise<DesktopController> {
     version: app.getVersion(),
     vault: createCredentialVault({
       directory,
-      encryption:
-        storageAvailable ?
-          {
-            encrypt: (value) => safeStorage.encryptStringAsync(value),
-            decrypt: (value) => safeStorage.decryptStringAsync(value),
-          }
-        : null,
+      encryption: nativeEncryptionPolicy(),
     }),
     writeClipboard: (text) => clipboard.writeText(text),
     async openExternal(url) {
@@ -191,14 +237,61 @@ async function createNativeController(): Promise<DesktopController> {
         throw new Error("Only GitHub sign-in can be opened.")
       if (!fixtureMode) await shell.openExternal(url)
     },
+    async openFolder(folder) {
+      await fs.mkdir(folder, { recursive: true, mode: 0o700 })
+      if (fixtureMode) return
+      const error = await shell.openPath(folder)
+      if (error) throw new Error("The configuration folder could not open.")
+    },
+    showUi: showWindow,
     applyLoginItem,
   })
   if (fixtureMode) await isolateFixturePort(companion)
+  const executablePath = app.getPath("exe")
+  const controlCapability = nativeControlCapability()
+  stopControl = await hostProxySession(
+    {
+      stateDirectory: nativeStateDirectory,
+      authority: companion.sessionApi(),
+      installation:
+        (
+          app.isPackaged
+          && !fixtureMode
+          && controlCapability.kind === "supported"
+        ) ?
+          {
+            executablePath,
+            packageFingerprint: await nativePackageFingerprint(
+              executablePath,
+              packageFileSystem,
+            ),
+          }
+        : undefined,
+      showUi: showWindow,
+    },
+    { packageFileSystem },
+  )
   return companion
+}
+
+async function verifyVaultIfRequested(): Promise<boolean> {
+  if (!vaultSmokeOutput) return false
+  if (fixtureMode || !dataDirectory)
+    throw new Error(
+      "Native vault verification requires an explicit isolated data directory.",
+    )
+  const { runNativeVaultSmoke } = await import("./smoke-vault")
+  await runNativeVaultSmoke({
+    dataDirectory: app.getPath("userData"),
+    outputDirectory: path.resolve(vaultSmokeOutput),
+  })
+  app.quit()
+  return true
 }
 
 async function start(): Promise<void> {
   await app.whenReady()
+  if (await verifyVaultIfRequested()) return
   controller = await createNativeController()
   session.defaultSession.setPermissionRequestHandler(
     (_contents, _permission, callback) => callback(false),
@@ -290,7 +383,7 @@ async function start(): Promise<void> {
     tray = null
   }
   await appWindow.loadFile(rendererFile)
-  appWindow.show()
+  if (!backgroundMode) appWindow.show()
   app.on("activate", showWindow)
 
   await smokeIfRequested(appWindow, companion)
@@ -307,6 +400,8 @@ async function smokeIfRequested(
         window: appWindow,
         controller: companion,
         outputDirectory: path.resolve(smokeOutput),
+        homeDirectory: app.getPath("userData"),
+        stateDirectory: nativeStateDirectory,
       })
     } catch (error) {
       await fs.mkdir(smokeOutput, { recursive: true })
@@ -323,7 +418,9 @@ async function smokeIfRequested(
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on("second-instance", showWindow)
+  app.on("second-instance", (_event, argv) => {
+    if (!argv.includes("--background")) showWindow()
+  })
   app.on("window-all-closed", () => {
     if (!tray || !controller?.snapshot().settings.closeToTray) app.quit()
   })
@@ -334,6 +431,7 @@ if (!app.requestSingleInstanceLock()) {
     shuttingDown = true
     void (async () => {
       await controller?.dispose()
+      await stopControl?.()
       await stopFixture?.()
     })()
       .catch(() => {
@@ -348,7 +446,8 @@ if (!app.requestSingleInstanceLock()) {
   void start().catch((error: unknown) => {
     const message =
       error instanceof Error ? error.message : "The app could not start."
-    if (!smokeOutput) dialog.showErrorBox("Copilot Proxy", message)
+    if (!smokeOutput && !vaultSmokeOutput)
+      dialog.showErrorBox("Copilot Proxy", message)
     markFailure()
     app.quit()
   })

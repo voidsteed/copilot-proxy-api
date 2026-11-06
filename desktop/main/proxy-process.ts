@@ -1,7 +1,8 @@
 import { fork, type ChildProcess } from "node:child_process"
 
+import type { CompletedActivity } from "../../src/lib/proxy-contracts"
 import type { ModelsResponse } from "../../src/services/copilot/get-models"
-import type { ActivityRecord } from "../shared/contracts"
+import type { DrainResult } from "../engine/runtime"
 
 import {
   engineEventSchema,
@@ -17,6 +18,7 @@ export class ProxyProcessError extends Error {
     | "upstream"
     | "startup"
     | "stopped"
+    | "drain-timeout"
 
   constructor(kind: ProxyProcessError["kind"]) {
     super(kind)
@@ -27,10 +29,15 @@ export class ProxyProcessError extends Error {
 export interface ProxyProcess {
   readonly ready: Promise<void>
   updateModels(models: ModelsResponse): Promise<void>
-  stop(): Promise<void>
+  drain(timeoutMs: number): Promise<DrainResult>
+  resume(): Promise<void>
+  stop(timeoutMs?: number): Promise<void>
 }
 
-function childEnvironment(): NodeJS.ProcessEnv {
+function spawnNativeEngine(options: {
+  runtimePath: string
+  runtimeExecPath?: string
+}): ChildProcess {
   const environment: NodeJS.ProcessEnv = { ELECTRON_RUN_AS_NODE: "1" }
   for (const key of [
     "PATH",
@@ -43,27 +50,37 @@ function childEnvironment(): NodeJS.ProcessEnv {
     "LANG",
     "LC_ALL",
     "TZ",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
   ]) {
     if (process.env[key] !== undefined) environment[key] = process.env[key]
   }
-  return environment
-}
-
-export function startProxyProcess(options: {
-  runtimePath: string
-  runtimeExecPath?: string
-  init: EngineInit
-  onActivity(record: ActivityRecord): void
-  onExit(expected: boolean): void
-}): ProxyProcess {
-  const init = engineInitSchema.parse(options.init)
-  const child = fork(options.runtimePath, [], {
+  return fork(options.runtimePath, [], {
     execPath: options.runtimeExecPath ?? process.execPath,
     execArgv: [],
-    env: childEnvironment(),
+    env: environment,
     stdio: ["ignore", "ignore", "ignore", "ipc"],
     serialization: "json",
   })
+}
+
+interface ProxyProcessOptions {
+  runtimePath: string
+  runtimeExecPath?: string
+  init: EngineInit
+  onActivity(record: CompletedActivity): void
+  onDraining?(inFlight: number): void
+  onExit(expected: boolean): void
+}
+export function startProxyProcess(options: ProxyProcessOptions): ProxyProcess {
+  const init = engineInitSchema.parse(options.init)
+  const child = spawnNativeEngine(options)
   const ready = Promise.withResolvers<undefined>()
   const exited = Promise.withResolvers<undefined>()
   void ready.promise.catch(() => undefined)
@@ -72,6 +89,7 @@ export function startProxyProcess(options: {
   let stopPromise: Promise<void> | undefined
   let stopTimer: ReturnType<typeof setTimeout> | undefined
   let killTimer: ReturnType<typeof setTimeout> | undefined
+  const controls = createControlChannel(child, () => didExit)
   const catalog = createCatalogChannel(
     child,
     ready.promise,
@@ -90,11 +108,12 @@ export function startProxyProcess(options: {
     clearTimeout(killTimer)
     ready.reject(new ProxyProcessError(expectedExit ? "stopped" : "startup"))
     catalog.close()
+    controls.close()
     exited.resolve(undefined)
     options.onExit(expectedExit)
   }
 
-  function stop(): Promise<void> {
+  function stop(timeoutMs = 15_000): Promise<void> {
     if (stopPromise) return stopPromise
     expectedExit = true
     ready.reject(new ProxyProcessError("stopped"))
@@ -102,18 +121,24 @@ export function startProxyProcess(options: {
     if (didExit) return Promise.resolve()
     stopPromise = exited.promise
     if (child.connected) child.send({ kind: "stop" }, () => undefined)
-    stopTimer = setTimeout(() => child.kill("SIGTERM"), 1500)
-    killTimer = setTimeout(() => child.kill("SIGKILL"), 3000)
+    stopTimer = setTimeout(
+      () => child.kill("SIGTERM"),
+      Math.min(timeoutMs, 1500),
+    )
+    killTimer = setTimeout(
+      () => child.kill("SIGKILL"),
+      Math.min(timeoutMs + 1000, 3000),
+    )
     return stopPromise
   }
 
-  child.once("spawn", () => {
-    child.send(init, (error) => {
-      if (error) {
-        ready.reject(new ProxyProcessError("startup"))
-        void stop()
-      }
-    })
+  monitorEngineProcess(child, {
+    init,
+    fail: () => ready.reject(new ProxyProcessError("startup")),
+    finish,
+    stop: () => {
+      void stop()
+    },
   })
   child.on("message", (input: unknown) =>
     handleEngineMessage(input, {
@@ -123,9 +148,12 @@ export function startProxyProcess(options: {
       },
       activity: (record) => options.onActivity(record),
       stopped: () => {
+        expectedExit = true
         if (child.connected) child.send({ kind: "exit" }, () => undefined)
       },
       catalog: (id) => catalog.acknowledge(id),
+      draining: (inFlight) => options.onDraining?.(inFlight),
+      control: (id, result) => controls.acknowledge(id, result),
       error: (code) => ready.reject(new ProxyProcessError(code)),
       invalid: () => {
         ready.reject(new ProxyProcessError("startup"))
@@ -133,17 +161,91 @@ export function startProxyProcess(options: {
       },
     }),
   )
-  child.once("error", () => {
-    ready.reject(new ProxyProcessError("startup"))
-    if (!child.pid) finish()
-    else void stop()
-  })
-  child.once("exit", finish)
   return {
     ready: ready.promise,
     stop,
+    drain: async (timeoutMs) => {
+      await ready.promise
+      return controls.request("drain", timeoutMs)
+    },
+    resume: async () => {
+      await ready.promise
+      await controls.request("resume", 1000)
+    },
     updateModels: (models) => catalog.update(models),
   }
+}
+function createControlChannel(child: ChildProcess, stopped: () => boolean) {
+  let sequence = 0
+  const pending = new Map<
+    number,
+    {
+      resolve(result: DrainResult): void
+      reject(error: Error): void
+      timer: ReturnType<typeof setTimeout>
+    }
+  >()
+  return {
+    request(kind: "drain" | "resume", timeoutMs: number): Promise<DrainResult> {
+      if (stopped() || !child.connected)
+        return Promise.reject(new ProxyProcessError("stopped"))
+      const id = ++sequence
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id)
+          reject(new ProxyProcessError("drain-timeout"))
+        }, timeoutMs + 1000)
+        pending.set(id, { resolve, reject, timer })
+        child.send(
+          kind === "resume" ? { kind, id } : { kind, id, timeoutMs },
+          (error) => {
+            if (!error) return
+            clearTimeout(timer)
+            pending.delete(id)
+            reject(new ProxyProcessError("stopped"))
+          },
+        )
+      })
+    },
+    acknowledge(id: number, result: DrainResult): void {
+      const request = pending.get(id)
+      if (!request) return
+      clearTimeout(request.timer)
+      pending.delete(id)
+      request.resolve(result)
+    },
+    close(): void {
+      for (const request of pending.values()) {
+        clearTimeout(request.timer)
+        request.reject(new ProxyProcessError("stopped"))
+      }
+      pending.clear()
+    },
+  }
+}
+function monitorEngineProcess(
+  child: ChildProcess,
+  hooks: {
+    init: EngineInit
+    fail: () => void
+    finish: () => void
+    stop: () => void
+  },
+): void {
+  child.once("spawn", () =>
+    child.send(hooks.init, (error) => {
+      if (error) {
+        hooks.fail()
+        hooks.stop()
+      }
+    }),
+  )
+  child.once("error", () => {
+    hooks.fail()
+    if (!child.pid) hooks.finish()
+    else hooks.stop()
+  })
+  child.once("exit", hooks.finish)
 }
 
 function createCatalogChannel(
@@ -200,9 +302,11 @@ function handleEngineMessage(
   input: unknown,
   handlers: {
     ready(): void
-    activity(record: ActivityRecord): void
+    activity(record: CompletedActivity): void
     stopped(): void
     catalog(id: number): void
+    draining(inFlight: number): void
+    control(id: number, result: DrainResult): void
     error(code: Extract<EngineEvent, { kind: "error" }>["code"]): void
     invalid(): void
   },
@@ -227,6 +331,25 @@ function handleEngineMessage(
     }
     case "catalog-updated": {
       handlers.catalog(parsed.data.id)
+      return
+    }
+    case "drained": {
+      handlers.control(parsed.data.id, { kind: "drained" })
+      return
+    }
+    case "resumed": {
+      handlers.control(parsed.data.id, { kind: "drained" })
+      return
+    }
+    case "drain-timeout": {
+      handlers.control(parsed.data.id, {
+        kind: "timeout",
+        inFlight: parsed.data.inFlight,
+      })
+      return
+    }
+    case "draining": {
+      handlers.draining(parsed.data.inFlight)
       return
     }
     case "error": {

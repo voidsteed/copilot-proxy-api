@@ -44,7 +44,7 @@ await build({
   format: "cjs",
   target: "node24",
   alias: { "~": path.resolve(root, "../src") },
-  external: ["electron", "pdf-parse"],
+  external: ["electron", "pdf-parse", "jsonc-parser", "original-fs"],
   sourcemap: true,
   logLevel: "info",
 })

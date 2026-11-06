@@ -473,6 +473,11 @@ function previewController() {
   const commands: Array<unknown> = []
   const controller: DesktopController = {
     snapshot: () => state,
+    sessionApi: () => {
+      throw new Error("This preview fixture does not host native control.")
+    },
+    activeConnection: () => null,
+    agentProposal: () => null,
     invoke: (input) => {
       commands.push(input)
       state = { ...state, revision: state.revision + 1 }

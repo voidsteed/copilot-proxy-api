@@ -1,6 +1,5 @@
 import {
   Box,
-  Check,
   Eye,
   RefreshCw,
   Search,
@@ -21,7 +20,7 @@ import {
   Button,
   EmptyState,
   formatLimit,
-  formatTime,
+  formatDateTime,
 } from "./components"
 
 const capabilities: Array<{
@@ -39,10 +38,8 @@ export function ModelsView({
   snapshot,
   run,
   pending,
-  onSetUp,
   onProbe,
 }: ViewProps & {
-  onSetUp: () => void
   onProbe: (modelId: string) => void
 }) {
   const [query, setQuery] = useState("")
@@ -65,6 +62,7 @@ export function ModelsView({
   )
   const filtered = Boolean(query) || Boolean(vendor) || Boolean(feature)
   const signedIn = snapshot.account.kind === "signed-in"
+  const canRefresh = signedIn || snapshot.connection !== null
 
   return (
     <div className="view-stack">
@@ -79,13 +77,13 @@ export function ModelsView({
         </div>
         <div className="heading-actions">
           {snapshot.modelsFetchedAt && (
-            <span className="muted fetched-at">
-              Updated {formatTime(snapshot.modelsFetchedAt)}
+            <span className="muted fetched-at" title={snapshot.modelsFetchedAt}>
+              Checked {formatDateTime(snapshot.modelsFetchedAt)}
             </span>
           )}
           <Button
             icon={RefreshCw}
-            disabled={!signedIn}
+            disabled={!canRefresh}
             busy={pending.has("refresh")}
             onClick={() => {
               void run({ kind: "refresh" })
@@ -166,21 +164,23 @@ export function ModelsView({
           <EmptyState
             icon={Box}
             title={
-              signedIn ? "No models available" : "Connect your Copilot account"
+              canRefresh ?
+                "No models available"
+              : "Connect your Copilot account"
             }
             action={
               <Button
                 variant="primary"
                 disabled={pending.has("sign-in")}
                 onClick={() => {
-                  void run({ kind: signedIn ? "refresh" : "sign-in" })
+                  void run({ kind: canRefresh ? "refresh" : "sign-in" })
                 }}
               >
-                {signedIn ? "Refresh models" : "Sign in with GitHub"}
+                {canRefresh ? "Refresh models" : "Sign in with GitHub"}
               </Button>
             }
           >
-            {signedIn ?
+            {canRefresh ?
               "Refresh the catalog to load the models available to your account."
             : "Your available models will appear here after sign-in."}
           </EmptyState>
@@ -220,12 +220,8 @@ export function ModelsView({
               </thead>
               <tbody>
                 {models.map((model) => {
-                  const selected = model.id === snapshot.settings.preferredModel
                   return (
-                    <tr
-                      key={model.id}
-                      className={selected ? "selected-model" : undefined}
-                    >
+                    <tr key={model.id}>
                       <td>
                         <div className="catalog-model">
                           <span className="vendor-mark" aria-hidden="true">
@@ -278,23 +274,6 @@ export function ModelsView({
                       </td>
                       <td>
                         <div className="model-actions">
-                          <Button
-                            className={`small-button ${selected ? "is-selected" : ""}`}
-                            icon={selected ? Check : undefined}
-                            disabled={pending.has("select-model")}
-                            aria-label={`Set up ${model.name} in an agent`}
-                            onClick={async () => {
-                              if (
-                                await run({
-                                  kind: "select-model",
-                                  modelId: model.id,
-                                })
-                              )
-                                onSetUp()
-                            }}
-                          >
-                            {selected ? "Selected" : "Set up"}
-                          </Button>
                           <Button
                             className="icon-button"
                             variant="ghost"

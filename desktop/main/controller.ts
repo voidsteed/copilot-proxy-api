@@ -1,99 +1,224 @@
-import { randomBytes } from "node:crypto"
-import { z } from "zod"
+import { randomUUID } from "node:crypto"
+import { join } from "node:path"
 
-import type { ModelsResponse } from "../../src/services/copilot/get-models"
 import type {
-  ControllerOptions,
-  DesktopController,
-  StoredCredentials,
-} from "./types"
+  AgentModel,
+  ConfigurableAgent,
+  ControlResult,
+  NativeConnection,
+  NativeIntent,
+  NativeSessionAuthority,
+  NativeSnapshot,
+  ServiceSnapshot,
+} from "../../src/lib/proxy-contracts"
+import type {
+  ControllerContext,
+  NativeOperationResult,
+} from "./controller-session"
+import type { ControllerOptions, DesktopController } from "./types"
 
 import {
-  createAccountClient,
-  fixtureOriginSchema,
-  toDesktopModel,
-} from "../engine/upstream"
+  configureMissingAgent,
+  getAgentConfigFolder,
+  inspectAgentConfigs,
+} from "../../src/lib/agent-config"
+import {
+  nativeIntentSchema,
+  runtimeOptionsSchema,
+  sessionIdSchema,
+} from "../../src/lib/proxy-contracts"
+import { fixtureOriginSchema } from "../engine/upstream"
+import { supportsAgent } from "../shared/connections"
 import {
   commandSchema,
-  type ActivityRecord,
   type DesktopCommand,
   type DesktopModel,
   type DesktopSettings,
   type DesktopSnapshot,
 } from "../shared/contracts"
 import { createClipboardText } from "./clipboard"
-import { gatewayError, signInError } from "./failure-messages"
-import { authorizeDevice, DEVICE_PAGE } from "./oauth"
+import {
+  authorizeNativeAccount,
+  ensureNativeAccount,
+} from "./controller-account"
+import {
+  createControllerAccountState,
+  refresh,
+  beginSignIn,
+  cancelAuthorization,
+  signOut,
+  rotateKey,
+  restore,
+} from "./controller-account"
+import { changeNativeGateway, activateRuntime } from "./controller-session"
+import { queueSettings } from "./controller-session"
+import {
+  createControllerSessionState,
+  applyLegacy,
+  drainReplacement,
+  convergeGateway,
+  setGatewayDesired,
+} from "./controller-session"
+import { DEVICE_PAGE } from "./oauth"
 import { executeProbe } from "./probe"
-import { type ProxyProcess, startProxyProcess } from "./proxy-process"
 import { createSettingsStore, persistSettings } from "./settings-store"
-import { appendActivity, initialSnapshot } from "./snapshot"
-const credentialsSchema = z
-  .object({
-    githubToken: z.string().min(1).max(16384),
-    gatewayKey: z.string().min(32).max(256),
-  })
-  .strict()
-function newGatewayKey(): string {
-  return randomBytes(32).toString("base64url")
-}
+import { createNativeSource, createNativeSnapshot } from "./snapshot"
+import { initialSnapshot } from "./snapshot"
 class Controller implements DesktopController {
-  private readonly options: ControllerOptions
-  private fixtureOrigin: string | undefined
-  private settingsStore: ReturnType<typeof createSettingsStore>
-  private state: DesktopSnapshot
-  private catalog: ModelsResponse | undefined
-  private credentials: StoredCredentials | null = null
-  private disposed: boolean = false
-  private accountGeneration: number = 0
-  private accountAbort: AbortController | undefined
-  private refreshAbort: AbortController | undefined
-  private probeAbort: AbortController | undefined
-  private desiredGateway: boolean = false
-  private configurationRevision: number = 0
-  private owned:
-    | {
-        process: ProxyProcess
-        revision: number
-      }
-    | undefined
-  private reconciliation: Promise<void> | undefined
-  private storage: Promise<void> = Promise.resolve()
-  private settingsWrites: Promise<void> = Promise.resolve()
-  private disposal: Promise<void> | undefined
-  private background: Set<Promise<void>> = new Set<Promise<void>>()
-  private listeners: Set<(snapshot: DesktopSnapshot) => void> = new Set<
-    (snapshot: DesktopSnapshot) => void
-  >()
+  private readonly context: ControllerContext
   constructor(
     options: ControllerOptions,
     settingsStore: ReturnType<typeof createSettingsStore>,
     loaded: Awaited<ReturnType<typeof settingsStore.load>>,
   ) {
-    this.options = options
-    this.settingsStore = settingsStore
-    this.fixtureOrigin =
-      this.options.fixtureOrigin === undefined ?
+    const fixtureOrigin =
+      options.fixtureOrigin === undefined ?
         undefined
-      : fixtureOriginSchema.parse(this.options.fixtureOrigin)
-    this.state = initialSnapshot({
-      version: options.version,
-      platform: options.platform,
-      fixture: this.fixtureOrigin !== undefined,
-      storageMode: options.vault.mode,
-      settings: loaded.settings,
-      recovered: loaded.recovered,
-    })
+      : fixtureOriginSchema.parse(options.fixtureOrigin)
+    const settings =
+      loaded.runtime ?
+        {
+          ...loaded.settings,
+          port: loaded.runtime.options.port,
+          accountType: loaded.runtime.options.accountType,
+        }
+      : loaded.settings
+    this.context = {
+      options,
+      homeDirectory: options.homeDirectory ?? options.dataDirectory,
+      stateDirectory:
+        options.stateDirectory ?? join(options.dataDirectory, "native"),
+      fixtureOrigin,
+      sessionId: sessionIdSchema.parse(randomUUID()),
+      settingsStore,
+      state: initialSnapshot({
+        version: options.version,
+        platform: options.platform,
+        fixture: fixtureOrigin !== undefined,
+        storageMode: options.vault.mode,
+        settings,
+        recovered: loaded.recovered,
+      }),
+      account: createControllerAccountState(),
+      session: createControllerSessionState(
+        loaded.runtime?.options
+          ?? runtimeOptionsSchema.parse({
+            port: loaded.settings.port,
+            accountType: loaded.settings.accountType,
+            manualApprove: false,
+            rateLimitSeconds: null,
+            rateLimitWait: false,
+            responsesContextTrim: false,
+            proxyFromEnvironment: false,
+          }),
+      ),
+      publish: (patch) => this.publish(patch),
+      notice: (message, kind) => this.notice(message, kind),
+      own: (task) => this.own(task),
+      inspectConfigs: () => this.inspectConfigs(),
+      refresh: () => refresh(this.context),
+      activeConnection: this.activeConnection,
+      nativeSource: () => this.nativeSource(),
+    }
+    this.context.state.source = this.nativeSource()
   }
-  snapshot = (): DesktopSnapshot => {
-    return structuredClone(this.state)
+  async restore(): Promise<void> {
+    await restore(this.context)
   }
+  private configInspection = 0
+  private disposal: Promise<void> | undefined
+  private readonly background = new Set<Promise<void>>()
+  private readonly listeners = new Set<(snapshot: DesktopSnapshot) => void>()
+  private readonly serviceListeners = new Set<
+    (snapshot: ServiceSnapshot) => void
+  >()
+  snapshot = (): DesktopSnapshot => structuredClone(this.context.state)
+  activeConnection = (): NativeConnection | null => {
+    if (this.context.state.gateway.kind !== "running") return null
+    if (
+      this.context.session.legacy
+      && this.context.session.legacySnapshot?.status === "reachable"
+      && this.context.session.legacyConnection
+    )
+      return structuredClone(this.context.session.legacyConnection)
+    return this.context.session.owned?.ready ?
+        structuredClone(this.context.session.owned.connection)
+      : null
+  }
+  agentProposal = (
+    target: ConfigurableAgent,
+  ): Extract<
+    AgentModel,
+    {
+      kind: "proposed"
+    }
+  > | null => {
+    const selected = this.context.state.settings.agentModelChoices[target]
+    const configured = this.context.state.models.find(
+      (model) => model.id === selected && supportsAgent(model, target),
+    )
+    const compatible = this.context.state.models.filter((model) =>
+      supportsAgent(model, target),
+    )
+    const candidate =
+      configured
+      ?? compatible.find((model) =>
+        target === "claude-code" ?
+          model.id.startsWith("claude")
+          || model.vendor.toLowerCase().includes("anthropic")
+        : model.id.startsWith("gpt"),
+      )
+      ?? compatible.at(0)
+    return candidate ? { kind: "proposed", catalogId: candidate.id } : null
+  }
+  private nativeSource(): Extract<
+    DesktopSnapshot["source"],
+    {
+      kind: "native-managed"
+    }
+  > {
+    return createNativeSource(this.context)
+  }
+  private nativeSnapshot(): NativeSnapshot {
+    return createNativeSnapshot(this.context)
+  }
+  private serviceSnapshot = (): ServiceSnapshot =>
+    this.context.session.legacySnapshot ?
+      structuredClone(this.context.session.legacySnapshot)
+    : this.nativeSnapshot()
+  sessionApi = (): NativeSessionAuthority => ({
+    snapshot: this.serviceSnapshot,
+    connection: this.activeConnection,
+    dispatch: (intent) =>
+      this.context.session.disposed ?
+        Promise.resolve({
+          kind: "unavailable" as const,
+          message: "The native proxy session is unavailable.",
+        })
+      : this.dispatchNative(intent),
+    subscribe: (listener) => {
+      this.serviceListeners.add(listener)
+      listener(this.serviceSnapshot())
+      return () => this.serviceListeners.delete(listener)
+    },
+  })
   private publish(patch: Partial<DesktopSnapshot>): void {
-    this.state = { ...this.state, ...patch, revision: this.state.revision + 1 }
-    if (this.disposed) return
+    this.context.state = {
+      ...this.context.state,
+      ...patch,
+      revision: this.context.state.revision + 1,
+    }
+    if (this.context.session.disposed) return
     for (const listener of this.listeners) {
       try {
         listener(this.snapshot())
+      } catch {
+        continue
+      }
+    }
+    for (const listener of this.serviceListeners) {
+      try {
+        listener(this.serviceSnapshot())
       } catch {
         continue
       }
@@ -105,367 +230,73 @@ class Controller implements DesktopController {
   private own(task: Promise<void>): void {
     const guarded = task
       .catch(() => {
-        if (!this.disposed)
+        if (!this.context.session.disposed)
           this.notice("The action could not be completed. Try again.")
       })
       .finally(() => this.background.delete(guarded))
     this.background.add(guarded)
   }
-  private writeCredentials(task: () => Promise<void>): Promise<void> {
-    const next = this.storage.then(task)
-    this.storage = next.catch(() => undefined)
-    return next
-  }
-  private invalidateAccount(): number {
-    this.accountGeneration++
-    this.accountAbort?.abort()
-    this.refreshAbort?.abort()
-    this.probeAbort?.abort()
-    return this.accountGeneration
-  }
-  private isAccountCurrent(generation: number, signal?: AbortSignal): boolean {
-    return (
-      !this.disposed
-      && !signal?.aborted
-      && generation === this.accountGeneration
-    )
-  }
-
-  private canRunGateway(revision = this.configurationRevision): boolean {
-    return (
-      this.desiredGateway
-      && !this.disposed
-      && this.state.account.kind === "signed-in"
-      && revision === this.configurationRevision
-    )
-  }
-
-  private recordActivity(process: ProxyProcess, record: ActivityRecord): void {
-    if (
-      this.disposed
-      || !this.credentials
-      || this.state.account.kind !== "signed-in"
-      || this.owned?.process !== process
-    )
-      return
-    this.publish(appendActivity(this.state, record))
-  }
-
-  private processExited(process: ProxyProcess, expected: boolean): void {
-    if (expected || this.disposed || this.owned?.process !== process) return
-    this.owned = undefined
-    this.desiredGateway = false
-    this.publish({
-      gateway: {
-        kind: "error",
-        message:
-          "The gateway exited unexpectedly. Start it again to reconnect.",
+  private async inspectConfigs(): Promise<void> {
+    const inspection = ++this.configInspection
+    const views = await inspectAgentConfigs({
+      homeDirectory: this.context.homeDirectory,
+      connection: this.activeConnection(),
+      catalog: this.context.state.models,
+      proposals: {
+        "claude-code": this.agentProposal("claude-code")?.catalogId ?? null,
+        codex: this.agentProposal("codex")?.catalogId ?? null,
+        opencode: this.agentProposal("opencode")?.catalogId ?? null,
       },
-      ...(this.state.probe.kind === "running" ?
-        {
-          probe: {
-            kind: "error",
-            message:
-              "The gateway stopped before the test request finished. Start it again.",
-          },
-        }
-      : {}),
     })
-    this.probeAbort?.abort()
+    if (!this.context.session.disposed && inspection === this.configInspection)
+      this.publish({ agentConfigs: views })
   }
-
-  private async reconcile(): Promise<void> {
-    while (true) {
-      if (this.owned && !this.canRunGateway(this.owned.revision)) {
-        const previous = this.owned
-        this.publish({ gateway: { kind: "stopping" } })
-        await previous.process.stop()
-        if (this.owned === previous) this.owned = undefined
-        this.publish({ gateway: { kind: "stopped" } })
-        continue
-      }
-      if (!this.canRunGateway() || !this.credentials) return
-      if (this.owned) return
-      const revision = this.configurationRevision
-      const generation = this.accountGeneration
-      const credentials = this.credentials
-      this.publish({ gateway: { kind: "starting" } })
-      if (!this.canRunGateway(revision)) continue
-      let process: ProxyProcess
-      try {
-        process = startProxyProcess({
-          runtimePath: this.options.runtimePath,
-          runtimeExecPath: this.options.runtimeExecPath,
-          init: {
-            kind: "init",
-            githubToken: credentials.githubToken,
-            gatewayKey: credentials.gatewayKey,
-            port: this.state.settings.port,
-            accountType: this.state.settings.accountType,
-            fixtureOrigin: this.fixtureOrigin,
-          },
-          onActivity: (record) => {
-            if (generation === this.accountGeneration)
-              this.recordActivity(process, record)
-          },
-          onExit: (expected) => this.processExited(process, expected),
-        })
-        this.owned = { process, revision }
-        await process.ready
-        await this.applyCurrentCatalog(process, revision)
-        if (this.canRunGateway(revision)) {
-          this.publish({
-            gateway: {
-              kind: "running",
-              url: `http://127.0.0.1:${this.state.settings.port}/v1`,
-              startedAt: new Date().toISOString(),
-            },
-          })
-          return
-        }
-      } catch (error) {
-        if (!this.canRunGateway(revision)) continue
-        this.desiredGateway = false
-        const previous = this.owned
-        if (previous) {
-          await previous.process.stop()
-          if (this.owned === previous) this.owned = undefined
-        }
-        this.publish({
-          gateway: { kind: "error", message: gatewayError(error) },
-        })
-        return
-      }
-    }
-  }
-  private async applyCurrentCatalog(
-    process: ProxyProcess,
-    revision: number,
-  ): Promise<void> {
-    let catalog = this.catalog
-    while (catalog && this.canRunGateway(revision)) {
-      await process.updateModels(catalog)
-      if (catalog === this.catalog) return
-      catalog = this.catalog
-    }
-  }
-
-  private convergeGateway(): Promise<void> {
-    if (!this.reconciliation) {
-      const task = Promise.resolve()
-        .then(() => this.reconcile())
-        .finally(() => {
-          if (this.reconciliation !== task) return
-          this.reconciliation = undefined
-          const unsettled =
-            this.owned ?
-              !this.canRunGateway(this.owned.revision)
-            : this.canRunGateway() && this.credentials !== null
-          if (unsettled) return this.convergeGateway()
-        })
-      this.reconciliation = task
-    }
-    return this.reconciliation
-  }
-  private setGatewayDesired(running: boolean): Promise<void> {
-    if (!running && this.desiredGateway) this.configurationRevision++
-    this.desiredGateway = running
-    if (!running) {
-      this.probeAbort?.abort()
-      if (this.state.probe.kind === "running")
-        this.publish({ probe: { kind: "idle" } })
-      if (!this.owned) this.publish({ gateway: { kind: "stopped" } })
-    }
-    if (
-      this.owned
-      && (!running || this.owned.revision !== this.configurationRevision)
-    )
-      this.own(this.owned.process.stop())
-    return this.convergeGateway()
-  }
-  private async refresh(): Promise<void> {
-    if (!this.credentials || this.state.account.kind !== "signed-in") return
-    this.refreshAbort?.abort()
-    const abort = new AbortController()
-    this.refreshAbort = abort
-    const generation = this.accountGeneration
-    const client = createAccountClient({
-      githubToken: this.credentials.githubToken,
-      accountType: this.state.settings.accountType,
-      fixtureOrigin: this.fixtureOrigin,
-      signal: abort.signal,
-    })
-    const results = await Promise.allSettled([
-      client
-        .token()
-        .then((token) => client.models(token.token))
-        .then((models) =>
-          this.synchronizeCatalog(models, generation, abort.signal),
-        ),
-      client.usage().then((usage) => {
-        if (
-          !this.isAccountCurrent(generation, abort.signal)
-          || this.state.account.kind !== "signed-in"
-        )
-          return
-        this.publish({
-          usage,
-          account: { ...this.state.account, plan: usage.plan },
-        })
-      }),
-    ])
-    if (!this.isAccountCurrent(generation, abort.signal)) return
-    if (results.some((result) => result.status === "rejected")) {
-      this.notice(
-        "Some account data could not be refreshed. Last successful values are still shown.",
-      )
-    }
-  }
-
-  private async synchronizeCatalog(
-    models: ModelsResponse,
-    generation: number,
-    signal: AbortSignal,
-  ): Promise<void> {
-    while (this.isAccountCurrent(generation, signal)) {
-      const target = this.owned
-      if (!target || !this.canRunGateway(target.revision)) break
-      try {
-        await target.process.updateModels(models)
-      } catch (error) {
-        if (this.owned === target && this.canRunGateway(target.revision)) {
-          await this.setGatewayDesired(false)
-          throw error
-        }
-        continue
-      }
-      if (this.owned === target) break
-    }
-    if (!this.isAccountCurrent(generation, signal)) return
-    this.catalog = models
-    this.publish({
-      models: models.data
-        .filter((model) => model.capabilities.type === "chat")
-        .map((model) => toDesktopModel(model)),
-      modelsFetchedAt: new Date().toISOString(),
-    })
-  }
-
-  private async finishAuthentication(
-    token: string,
-    generation: number,
-    signal: AbortSignal,
-  ): Promise<void> {
-    const client = createAccountClient({
-      githubToken: token,
-      accountType: this.state.settings.accountType,
-      fixtureOrigin: this.fixtureOrigin,
-      signal,
-    })
-    const user = await client.user()
-    if (!this.isAccountCurrent(generation, signal)) return
-    const next = {
-      githubToken: token,
-      gatewayKey: this.credentials?.gatewayKey ?? newGatewayKey(),
-    }
-    await this.writeCredentials(async () => {
-      if (!this.isAccountCurrent(generation, signal)) return
-      await this.options.vault.save(next)
-      if (!this.isAccountCurrent(generation, signal))
-        await this.options.vault.clear()
-    })
-    if (!this.isAccountCurrent(generation, signal)) return
-    this.credentials = next
-    this.configurationRevision++
-    this.publish({
-      account: {
-        kind: "signed-in",
-        login: user.login,
-        name: user.name,
-        plan: "Copilot",
-      },
-      notice: null,
-    })
-    await this.refresh()
-    if (this.isAccountCurrent(generation, signal)) await this.convergeGateway()
-  }
-  private beginSignIn(): void {
-    if (
-      this.state.account.kind === "signed-in"
-      || this.state.account.kind === "connecting"
-      || this.state.account.kind === "awaiting-authorization"
-    )
-      return
-    const generation = this.invalidateAccount()
-    const abort = new AbortController()
-    this.accountAbort = abort
-    this.desiredGateway = this.state.settings.startOnLaunch
-    this.publish({
-      account: { kind: "connecting" },
-      notice: null,
-      probe: { kind: "idle" },
-    })
-    this.own(
-      authorizeDevice({
-        fixtureOrigin: this.fixtureOrigin,
-        signal: abort.signal,
-        onCode: (code) => {
-          if (this.isAccountCurrent(generation, abort.signal)) {
-            this.publish({
-              account: { kind: "awaiting-authorization", ...code },
-            })
-          }
-        },
-      })
-        .then((token) =>
-          this.finishAuthentication(token, generation, abort.signal),
-        )
-        .catch((error: unknown) => {
-          if (this.isAccountCurrent(generation, abort.signal)) {
-            this.publish({
-              account: { kind: "error", message: signInError(error) },
-            })
-          }
-        }),
-    )
-  }
-  private async signOut(): Promise<void> {
-    this.invalidateAccount()
-    this.credentials = null
-    this.catalog = undefined
-    this.configurationRevision++
-    const clearing = this.writeCredentials(() => this.options.vault.clear())
-    const stopping = this.setGatewayDesired(false)
-    this.publish({
-      account: { kind: "signed-out" },
-      models: [],
-      modelsFetchedAt: null,
-      usage: null,
-      probe: { kind: "idle" },
-      activity: [],
-      totals: {
-        requests: 0,
-        errors: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedTokens: 0,
-      },
-      notice: null,
-    })
-    await Promise.all([clearing, stopping])
+  private persistedSettings(settings: DesktopSettings): DesktopSettings {
+    if (!this.context.session.legacy) return settings
+    const options =
+      this.context.settingsStore.runtime()?.options
+      ?? this.context.session.runtime
+    return { ...settings, port: options.port, accountType: options.accountType }
   }
   private saveSettings(
     change: (current: DesktopSettings) => DesktopSettings,
   ): Promise<void> {
-    const task = this.settingsWrites.then(async () => {
-      if (this.disposed) return
-      const previous = this.state.settings
-      const next = change(previous)
+    return queueSettings(this.context, async () => {
+      if (this.context.session.disposed) return
+      const displayedPrevious = this.context.state.settings
+      const displayedNext = change(displayedPrevious)
+      const restart =
+        displayedNext.port !== displayedPrevious.port
+        || displayedNext.accountType !== displayedPrevious.accountType
+      if (restart && this.context.session.legacy) {
+        this.notice(
+          "The CLI gateway's runtime settings are managed in Terminal.",
+        )
+        return
+      }
+      const previousRuntime = this.context.settingsStore.runtime()
+      const previous = this.persistedSettings(displayedPrevious)
+      const next = this.persistedSettings(displayedNext)
       const saved = await persistSettings({
         previous,
         next,
-        applyLoginItem: this.options.applyLoginItem?.bind(this.options),
-        save: (settings) => this.settingsStore.save(settings),
+        applyLoginItem: this.context.options.applyLoginItem?.bind(
+          this.context.options,
+        ),
+        save: (settings) =>
+          this.context.settingsStore.save(
+            settings,
+            previousRuntime && !this.context.session.legacy ?
+              {
+                ...previousRuntime,
+                options: {
+                  ...previousRuntime.options,
+                  port: next.port,
+                  accountType: next.accountType,
+                },
+              }
+            : previousRuntime,
+          ),
       })
       if (saved !== "saved") {
         this.notice(
@@ -476,37 +307,49 @@ class Controller implements DesktopController {
         return
       }
       if (this.disposal) return
-      const restart =
-        next.port !== previous.port || next.accountType !== previous.accountType
-      const accountChanged = next.accountType !== previous.accountType
-      if (accountChanged) {
-        this.refreshAbort?.abort()
-        this.catalog = undefined
+      const target = this.context.session.owned
+      if (
+        restart
+        && target
+        && !(await drainReplacement(this.context, target))
+      ) {
+        await persistSettings({
+          previous: next,
+          next: previous,
+          applyLoginItem: this.context.options.applyLoginItem?.bind(
+            this.context.options,
+          ),
+          save: (settings) =>
+            this.context.settingsStore.save(settings, previousRuntime),
+        })
+        this.notice(
+          "The gateway is still serving an agent request. Its running configuration was preserved.",
+        )
+        return
       }
-      this.publish({
-        settings: next,
-        ...(accountChanged ?
-          { models: [], modelsFetchedAt: null, usage: null }
-        : {}),
-      })
+      this.publish({ settings: displayedNext })
       if (restart) {
-        this.configurationRevision++
-        this.probeAbort?.abort()
-        if (this.state.probe.kind === "running")
-          this.publish({ probe: { kind: "idle" } })
-        if (this.owned) this.own(this.owned.process.stop())
-        await this.convergeGateway()
+        activateRuntime(this.context, {
+          runtime: {
+            ...this.context.session.runtime,
+            port: next.port,
+            accountType: next.accountType,
+          },
+          authentication: this.context.session.authentication,
+        })
+        if (next.accountType !== previous.accountType)
+          await refresh(this.context)
+        await convergeGateway(this.context)
       }
-      if (accountChanged) await this.refresh()
+      await this.inspectConfigs()
     })
-    this.settingsWrites = task.catch(() => undefined)
-    return task
   }
   private getModel(id: string): DesktopModel | undefined {
-    return this.state.models.find((model) => model.id === id)
+    return this.context.state.models.find((model) => model.id === id)
   }
   private async runProbe(model: DesktopModel, prompt: string): Promise<void> {
-    if (!this.credentials || this.state.gateway.kind !== "running") {
+    const connection = this.activeConnection()
+    if (!connection) {
       this.publish({
         probe: {
           kind: "error",
@@ -515,56 +358,54 @@ class Controller implements DesktopController {
       })
       return
     }
-    this.probeAbort?.abort()
+    this.context.session.probeAbort?.abort()
     const abort = new AbortController()
-    this.probeAbort = abort
-    const generation = this.accountGeneration
-    const revision = this.configurationRevision
-    const baseUrl = this.state.gateway.url
-    const key = this.credentials.gatewayKey
+    this.context.session.probeAbort = abort
+    const revision = this.context.session.configurationRevision
     const current = () =>
-      !this.disposed
+      !this.context.session.disposed
       && !abort.signal.aborted
-      && generation === this.accountGeneration
-      && revision === this.configurationRevision
+      && revision === this.context.session.configurationRevision
     this.publish({ probe: { kind: "running", model: model.id } })
     try {
       const result = await executeProbe({
-        baseUrl,
-        gatewayKey: key,
+        connection,
         model,
         prompt,
         signal: abort.signal,
       })
-      if (current()) this.publish({ probe: result })
+      if (current()) {
+        this.publish({ probe: result })
+        if (this.context.session.legacy)
+          applyLegacy(this.context, await this.context.session.legacy.read())
+      }
     } catch {
-      if (!current()) return
-      this.publish({
-        probe: {
-          kind: "error",
-          message:
-            "The test request failed. Check gateway activity and try another model or refresh your account.",
-        },
-      })
+      if (current())
+        this.publish({
+          probe: {
+            kind: "error",
+            message:
+              "The test request failed. Check gateway activity and try another model or refresh your account.",
+          },
+        })
     }
   }
   invoke = async (input: unknown): Promise<DesktopSnapshot> => {
-    if (this.disposed) return this.snapshot()
-    const parsed = commandSchema.safeParse(input)
-    if (!parsed.success) {
+    if (this.context.session.disposed) return this.snapshot()
+    const command = commandSchema.safeParse(input)
+    if (!command.success) {
       this.notice("The app received an invalid command.")
       return this.snapshot()
     }
     this.publish({ notice: null })
     try {
-      await this.dispatch(parsed.data)
+      await this.dispatch(command.data)
     } catch {
       this.notice("The action could not be completed. Try again.")
     }
     return this.snapshot()
   }
-
-  private dispatch(command: DesktopCommand): void | Promise<void> {
+  private dispatch(command: DesktopCommand): Promise<void> {
     switch (command.kind) {
       case "copy":
       case "copy-config": {
@@ -577,15 +418,190 @@ class Controller implements DesktopController {
         return this.handleGatewayCommand(command)
       }
       case "save-settings":
-      case "select-model": {
-        return this.handleSettingsCommand(command)
+      case "select-model":
+      case "select-agent-model":
+      case "inspect-agent-config":
+      case "open-config-folder":
+      case "configure-agent": {
+        return this.handleConfigurationCommand(command)
       }
       default: {
         return this.handleAccountCommand(command)
       }
     }
   }
-
+  private async handleClipboardCommand(
+    command: Extract<
+      DesktopCommand,
+      {
+        kind: "copy" | "copy-config"
+      }
+    >,
+  ): Promise<void> {
+    switch (command.kind) {
+      case "copy":
+      case "copy-config": {
+        const authorization = this.context.state.authorization
+        const result = createClipboardText({
+          command,
+          connection: this.activeConnection(),
+          models: this.context.state.models,
+          agentConfigs: this.context.state.agentConfigs,
+          deviceCode:
+            authorization.kind === "awaiting" ? authorization.code : null,
+        })
+        if (result.kind === "error") this.notice(result.message)
+        else await this.context.options.writeClipboard(result.text)
+        return
+      }
+      default: {
+        const exhaustive: never = command
+        return exhaustive
+      }
+    }
+  }
+  private async handleGatewayCommand(
+    command: Extract<
+      DesktopCommand,
+      {
+        kind: "start-gateway" | "stop-gateway" | "rotate-key" | "run-probe"
+      }
+    >,
+  ): Promise<void> {
+    switch (command.kind) {
+      case "start-gateway": {
+        if (this.context.session.legacy) {
+          await refresh(this.context)
+          return
+        }
+        if (
+          !this.context.account.credentials
+          || this.context.state.account.kind !== "signed-in"
+        )
+          this.notice("Sign in to GitHub before starting the gateway.")
+        else await setGatewayDesired(this.context, true)
+        return
+      }
+      case "stop-gateway": {
+        await setGatewayDesired(this.context, false)
+        return
+      }
+      case "rotate-key": {
+        await rotateKey(this.context)
+        return
+      }
+      case "run-probe": {
+        const model = this.getModel(command.modelId)
+        if (model) this.own(this.runProbe(model, command.prompt))
+        else
+          this.publish({
+            probe: {
+              kind: "error",
+              message:
+                "Choose an available model before sending a test request.",
+            },
+          })
+        return
+      }
+      default: {
+        const exhaustive: never = command
+        return exhaustive
+      }
+    }
+  }
+  private async handleConfigurationCommand(
+    command: Extract<
+      DesktopCommand,
+      {
+        kind:
+          | "save-settings"
+          | "select-model"
+          | "select-agent-model"
+          | "inspect-agent-config"
+          | "open-config-folder"
+          | "configure-agent"
+      }
+    >,
+  ): Promise<void> {
+    switch (command.kind) {
+      case "save-settings": {
+        await this.saveSettings(() => command.settings)
+        return
+      }
+      case "select-model": {
+        if (!this.getModel(command.modelId)) {
+          this.notice(
+            "This model is no longer available. Refresh the model catalog.",
+          )
+          return
+        }
+        await this.saveSettings((current) => ({
+          ...current,
+          preferredModel: command.modelId,
+        }))
+        return
+      }
+      case "select-agent-model": {
+        const model = this.getModel(command.modelId)
+        if (!model || !supportsAgent(model, command.target)) {
+          this.notice(
+            "Choose an available model that supports this agent's API.",
+          )
+          return
+        }
+        await this.saveSettings((current) => ({
+          ...current,
+          agentModelChoices: {
+            ...current.agentModelChoices,
+            [command.target]: command.modelId,
+          },
+        }))
+        return
+      }
+      case "inspect-agent-config": {
+        await this.inspectConfigs()
+        return
+      }
+      case "open-config-folder": {
+        if (!this.context.options.openFolder) {
+          this.notice(
+            "Opening configuration folders is unavailable in this session.",
+          )
+          return
+        }
+        await this.context.options.openFolder(
+          getAgentConfigFolder(command.target, this.context.homeDirectory),
+        )
+        return
+      }
+      case "configure-agent": {
+        const connection = this.activeConnection()
+        if (!connection) {
+          this.notice("Start the proxy before configuring an agent.")
+          return
+        }
+        const result = await configureMissingAgent({
+          homeDirectory: this.context.homeDirectory,
+          target: command.target,
+          connection,
+          catalog: this.context.state.models,
+          proposal: this.agentProposal(command.target),
+        })
+        this.publish({ lastConfigureResult: result })
+        await this.inspectConfigs()
+        if (result.kind === "conflict")
+          this.notice(
+            "Existing configuration values were preserved. Review the fields that point to another proxy.",
+          )
+        else if (result.kind === "invalid") this.notice(result.message)
+        return
+      }
+      default: {
+        const exhaustive: never = command
+        return exhaustive
+      }
+    }
+  }
   private async handleAccountCommand(
     command: Extract<
       DesktopCommand,
@@ -603,37 +619,32 @@ class Controller implements DesktopController {
   ): Promise<void> {
     switch (command.kind) {
       case "sign-in": {
-        this.beginSignIn()
+        beginSignIn(this.context)
         return
       }
       case "cancel-sign-in": {
-        if (
-          this.state.account.kind === "connecting"
-          || this.state.account.kind === "awaiting-authorization"
-        ) {
-          this.invalidateAccount()
-          this.credentials = null
-          this.desiredGateway = false
-          this.publish({ account: { kind: "signed-out" } })
-          this.own(this.writeCredentials(() => this.options.vault.clear()))
-        }
+        cancelAuthorization(this.context)
         return
       }
       case "open-device-page": {
-        if (this.state.account.kind === "awaiting-authorization")
-          await this.options.openExternal(DEVICE_PAGE)
+        if (this.context.state.authorization.kind === "awaiting")
+          await this.context.options.openExternal(DEVICE_PAGE)
         return
       }
       case "sign-out": {
-        await this.signOut()
+        await signOut(this.context)
         return
       }
       case "refresh": {
-        await this.refresh()
+        await refresh(this.context)
         return
       }
       case "clear-activity": {
-        this.publish({ activity: [] })
+        if (this.context.session.legacy)
+          this.notice(
+            "The CLI retains this activity history. Its totals are not available.",
+          )
+        else this.publish({ activity: [] })
         return
       }
       case "dismiss-notice": {
@@ -645,138 +656,95 @@ class Controller implements DesktopController {
       }
     }
   }
-
-  private handleSettingsCommand(
-    command: Extract<
-      DesktopCommand,
-      { kind: "save-settings" | "select-model" }
-    >,
-  ): void | Promise<void> {
-    if (command.kind === "save-settings")
-      return this.saveSettings(() => command.settings)
-    if (!this.getModel(command.modelId)) {
-      this.notice(
-        "This model is no longer available. Refresh the model catalog.",
-      )
-      return
-    }
-    return this.saveSettings((current) => ({
-      ...current,
-      preferredModel: command.modelId,
-    }))
-  }
-
-  private async handleGatewayCommand(
-    command: Extract<
-      DesktopCommand,
-      { kind: "start-gateway" | "stop-gateway" | "rotate-key" | "run-probe" }
-    >,
-  ): Promise<void> {
-    switch (command.kind) {
-      case "start-gateway": {
-        if (!this.credentials || this.state.account.kind !== "signed-in")
-          this.notice("Sign in to GitHub before starting the gateway.")
-        else await this.setGatewayDesired(true)
-        return
+  private async dispatchNative(input: NativeIntent): Promise<ControlResult> {
+    const parsed = nativeIntentSchema.safeParse(input)
+    if (!parsed.success)
+      return {
+        kind: "unavailable",
+        message: "The native proxy session is unavailable.",
       }
-      case "stop-gateway": {
-        await this.setGatewayDesired(false)
-        return
-      }
-      case "rotate-key": {
-        await this.rotateKey()
-        return
-      }
-      case "run-probe": {
-        const model = this.getModel(command.modelId)
-        if (!model)
-          this.publish({
-            probe: {
-              kind: "error",
-              message:
-                "Choose an available model before sending a test request.",
-            },
-          })
-        else this.own(this.runProbe(model, command.prompt))
-        return
-      }
-      default: {
-        const exhaustive: never = command
-        return exhaustive
-      }
-    }
-  }
-
-  private async rotateKey(): Promise<void> {
-    if (!this.credentials) {
-      this.notice("Sign in before changing the gateway key.")
-      return
-    }
-    const generation = this.accountGeneration
-    const next = { ...this.credentials, gatewayKey: newGatewayKey() }
-    await this.writeCredentials(async () => {
-      if (!this.disposed && generation === this.accountGeneration)
-        await this.options.vault.save(next)
-    })
-    if (!this.isAccountCurrent(generation)) return
-    this.credentials = next
-    this.configurationRevision++
-    this.probeAbort?.abort()
-    if (this.state.probe.kind === "running")
-      this.publish({ probe: { kind: "idle" } })
-    if (this.owned) this.own(this.owned.process.stop())
-    await this.convergeGateway()
-    this.notice(
-      "Gateway key changed. Copy fresh configurations for your agents.",
-      "info",
-    )
-  }
-
-  private async handleClipboardCommand(
-    command: Extract<DesktopCommand, { kind: "copy" | "copy-config" }>,
-  ): Promise<void> {
-    const result = createClipboardText({
-      command,
-      port: this.state.settings.port,
-      gatewayKey: this.credentials?.gatewayKey ?? null,
-      deviceCode:
-        this.state.account.kind === "awaiting-authorization" ?
-          this.state.account.code
-        : null,
-      models: this.state.models,
-    })
-    if (result.kind === "error") this.notice(result.message)
-    else await this.options.writeClipboard(result.text)
-  }
-  async restore(): Promise<void> {
+    const intent = parsed.data
+    if (intent.kind === "show-ui") return this.showNativeUi()
+    const immediate = await this.readOnlyNativeResult(intent)
+    if (immediate) return immediate
     try {
-      const stored = await this.options.vault.load()
-      if (stored) {
-        this.credentials = credentialsSchema.parse(stored)
-        const generation = this.invalidateAccount()
-        const abort = new AbortController()
-        this.accountAbort = abort
-        this.desiredGateway = this.state.settings.startOnLaunch
-        this.publish({ account: { kind: "connecting" } })
-        this.own(
-          this.finishAuthentication(
-            this.credentials.githubToken,
-            generation,
-            abort.signal,
-          ).catch((error: unknown) => {
-            if (this.isAccountCurrent(generation, abort.signal)) {
-              this.credentials = null
-              this.publish({
-                account: { kind: "error", message: signInError(error) },
-              })
-            }
-          }),
-        )
+      let result: NativeOperationResult | null = null
+      switch (intent.kind) {
+        case "authorize":
+        case "cancel-authorization":
+        case "authorize-with-token": {
+          result = await authorizeNativeAccount(this.context, intent)
+          break
+        }
+        case "ensure-running": {
+          result = await ensureNativeAccount(this.context, intent)
+          break
+        }
+        case "update-runtime":
+        case "stop-gateway":
+        case "drain-gateway": {
+          result = await changeNativeGateway(this.context, intent)
+          break
+        }
+        case "sign-out": {
+          await signOut(this.context)
+          break
+        }
+        case "refresh": {
+          await refresh(this.context)
+          break
+        }
+        case "clear-activity": {
+          this.publish({ activity: [] })
+          break
+        }
+        default: {
+          const exhaustive: never = intent
+          return exhaustive
+        }
       }
+      return this.nativeResult(result)
     } catch {
-      this.credentials = null
-      this.notice("Saved credentials could not be restored. Sign in again.")
+      return {
+        kind: "unavailable",
+        message: "The requested proxy action could not be completed.",
+      }
     }
+  }
+  private nativeResult(result: NativeOperationResult | null): ControlResult {
+    if (result && result.kind !== "applied") return result
+    if (this.context.session.legacy)
+      return { kind: "session-changed", snapshot: this.serviceSnapshot() }
+    const createdGateway = result?.createdGateway ?? null
+    return {
+      kind: "applied",
+      snapshot: this.nativeSnapshot(),
+      createdGateway:
+        (
+          createdGateway
+          && this.context.session.owned?.ready
+          && createdGateway.sessionId === this.context.sessionId
+          && createdGateway.gatewayGeneration
+            === this.context.session.owned.generation
+        ) ?
+          createdGateway
+        : null,
+    }
+  }
+  private async readOnlyNativeResult(
+    intent: NativeIntent,
+  ): Promise<ControlResult | null> {
+    if (this.context.session.legacy) {
+      if (intent.kind === "refresh") await refresh(this.context)
+      return { kind: "session-changed", snapshot: this.serviceSnapshot() }
+    }
+    return null
+  }
+  private async showNativeUi(): Promise<ControlResult> {
+    await this.context.options.showUi?.()
+    return this.context.session.legacySnapshot ?
+        { kind: "session-changed", snapshot: this.serviceSnapshot() }
+      : this.nativeResult(null)
   }
   subscribe = (listener: (snapshot: DesktopSnapshot) => void) => {
     this.listeners.add(listener)
@@ -784,16 +752,28 @@ class Controller implements DesktopController {
   }
   dispose = (): Promise<void> => {
     this.disposal ??= (async () => {
-      this.disposed = true
-      this.invalidateAccount()
+      this.context.session.disposed = true
+      this.context.account.attempt?.abort.abort()
+      this.context.account.attempt = undefined
+      this.context.account.accountGeneration++
+      this.context.account.refreshAbort?.abort()
+      this.context.session.probeAbort?.abort()
+      this.context.session.desiredGateway = false
+      this.context.session.legacyUnsubscribe?.()
       this.listeners.clear()
-      await this.setGatewayDesired(false)
+      this.serviceListeners.clear()
+      if (this.context.session.legacy)
+        await this.context.session.legacy.release()
+      if (this.context.session.owned)
+        await this.context.session.owned.process.stop()
+      this.context.session.owned = undefined
       await Promise.allSettled([
         ...this.background,
-        this.settingsWrites,
-        this.storage,
+        this.context.session.settingsWrites,
+        this.context.account.storage,
+        this.context.session.reconciliation,
       ])
-      this.credentials = null
+      this.context.account.credentials = null
     })()
     return this.disposal
   }
@@ -805,8 +785,11 @@ export async function createController(
     options.dataDirectory,
     options.platform === "win32" ? "powershell" : "posix",
   )
-  const loaded = await settingsStore.load()
-  const controller = new Controller(options, settingsStore, loaded)
+  const controller = new Controller(
+    options,
+    settingsStore,
+    await settingsStore.load(),
+  )
   await controller.restore()
   return controller
 }

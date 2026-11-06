@@ -2,24 +2,71 @@ import type { BrowserWindow } from "electron"
 
 import { clipboard } from "electron"
 import assert from "node:assert/strict"
+import { execFile } from "node:child_process"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { promisify } from "node:util"
 import { z } from "zod"
 
 import type { DesktopController } from "./types"
 
 import { fixturePdf } from "../testing/pdf"
 import { availablePort } from "../testing/settings"
+import {
+  seedNativeAgentFiles,
+  verifyNativeAgentFile,
+} from "../testing/smoke-fixtures"
+import { verifyNativeLegacy } from "./smoke-legacy"
+import { verifyNativeSharing } from "./smoke-shared"
 
 export async function runNativeSmoke(options: {
   window: BrowserWindow
   controller: DesktopController
   outputDirectory: string
+  homeDirectory: string
+  stateDirectory: string
 }): Promise<void> {
   const { window, controller, outputDirectory } = options
   await fs.mkdir(outputDirectory, { recursive: true })
   const checks: Array<string> = []
   const startedAt = new Date().toISOString()
+  const originalClipboard = await clipboard.readText()
+  const legacyMode = process.argv.includes("--legacy-native-smoke")
+
+  async function writeReport(): Promise<void> {
+    await fs.writeFile(
+      path.join(outputDirectory, "smoke.json"),
+      JSON.stringify(
+        {
+          passed: true,
+          mode: legacyMode ? "legacy-fixture" : "fixture",
+          platform: process.platform,
+          electron: process.versions.electron,
+          node: process.versions.node,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          checks,
+          limitations: [
+            "Controlled upstream services; no live Copilot inference or GitHub consent",
+            "Session-only fixture vault; OS credential encryption requires a live user session",
+            "The fixture folder callback creates its selected directory; OS folder opening is verified separately",
+            ...(process.platform === "darwin" ?
+              []
+            : [
+                "Private native-control workflows require Mac execution; they were not verified on this platform",
+              ]),
+            ...(process.platform === "win32" ?
+              [
+                "Symlink preservation and POSIX copied-command execution require a supported native environment",
+              ]
+            : []),
+          ],
+        },
+        null,
+        2,
+      ) + "\n",
+    )
+  }
 
   async function waitFor(
     name: string,
@@ -124,7 +171,7 @@ export async function runNativeSmoke(options: {
   try {
     await waitFor("renderer bridge", () =>
       javascript(
-        "Boolean(window.copilotProxy && document.querySelector('[data-testid=sign-in]'))",
+        "Boolean(window.copilotProxy && document.querySelector('[data-testid=nav-overview]'))",
       ),
     )
     assert(
@@ -133,6 +180,26 @@ export async function runNativeSmoke(options: {
       ),
     )
     checks.push("Sandboxed native renderer loads without Node access")
+    if (legacyMode) {
+      assert.equal(
+        process.platform,
+        "darwin",
+        "The legacy private-control workflow requires this Mac",
+      )
+      checks.push(
+        ...(await verifyNativeLegacy({
+          ...options,
+          ui: { click, input, javascript, capture, waitFor },
+        })),
+      )
+      await writeReport()
+      return
+    }
+    assert.equal(
+      controller.snapshot().account.kind,
+      "signed-out",
+      "Native smoke requires a fresh isolated fixture profile",
+    )
     await capture("native-signed-out")
 
     await click('[data-testid="sign-in"]')
@@ -159,9 +226,19 @@ export async function runNativeSmoke(options: {
         controller.snapshot().account.kind === "signed-in"
         && controller.snapshot().gateway.kind === "running",
     )
+    const fixtureKey =
+      "fixture_native_gateway_key_012345678901234567890123456789"
+    const keyed = await controller.sessionApi().dispatch({
+      kind: "update-runtime",
+      explicit: { authentication: { kind: "keyed", keys: [fixtureKey] } },
+    })
+    assert.equal(keyed.kind, "applied")
     const connected = controller.snapshot()
     assert.equal(connected.fixture, true)
-    assert(connected.models.length >= 5)
+    assert.equal(connected.models.length, 6)
+    assert(
+      connected.models.some((model) => model.id === "fixture-responses-only"),
+    )
     assert(connected.usage?.quotas.length)
     const gateway = connected.gateway
     assert.equal(gateway.kind, "running")
@@ -171,14 +248,47 @@ export async function runNativeSmoke(options: {
       "Approved fixture login loads the real catalog and quota path into the native window",
     )
     await capture("native-overview")
+    if (process.platform === "darwin")
+      checks.push(
+        ...(await verifyNativeSharing({
+          ...options,
+          async verifyReplacement() {
+            await waitFor(
+              "signed-in account replacement dialog",
+              async () =>
+                controller.snapshot().authorization.kind === "awaiting"
+                && (await javascript(
+                  "Boolean(document.querySelector('.device-code'))",
+                )),
+            )
+            assert.equal(controller.snapshot().account.kind, "signed-in")
+            assert.equal(controller.snapshot().gateway.kind, "running")
+            await capture("native-account-replacement")
+            await click('[data-testid="cancel-sign-in"]')
+            await waitFor(
+              "cancelled account replacement",
+              async () =>
+                controller.snapshot().authorization.kind === "idle"
+                && (await javascript(
+                  "!document.querySelector('.device-code')",
+                )),
+            )
+            await new Promise((resolve) => setTimeout(resolve, 3500))
+          },
+        })),
+      )
 
     await click('[data-testid="nav-settings"]')
     await click('button[aria-label="Copy local API key"]')
     await waitFor(
       "native clipboard key",
-      async () => (await clipboard.readText()).length >= 32,
+      async () => (await clipboard.readText()) === fixtureKey,
     )
     const gatewayKey = await clipboard.readText()
+    assert(
+      gatewayKey === fixtureKey,
+      "Native copy returns the active fixture key",
+    )
     const headers = () => ({
       authorization: `Bearer ${gatewayKey}`,
       "content-type": "application/json",
@@ -229,6 +339,7 @@ export async function runNativeSmoke(options: {
       model.endpoints.includes("/chat/completions"),
     )
     assert(chatModel)
+    const streamStartedAt = Date.now()
     const stream = await fetch(`${originalBase}/chat/completions`, {
       method: "POST",
       headers: headers(),
@@ -244,7 +355,12 @@ export async function runNativeSmoke(options: {
       controller
         .snapshot()
         .activity.some(
-          (entry) => entry.outputTokens === 9 && entry.inputTokens === 37,
+          (entry) =>
+            entry.outcome === "completed"
+            && entry.model === chatModel.id
+            && Date.parse(entry.startedAt) >= streamStartedAt
+            && entry.outputTokens === 9
+            && entry.inputTokens === 37,
         ),
     )
     checks.push(
@@ -289,21 +405,234 @@ export async function runNativeSmoke(options: {
     await input('[data-testid="model-search"]', "responses")
     await waitFor("model search", () =>
       javascript(
-        "document.querySelectorAll('.model-table tbody tr, .models-table tbody tr').length <= 2",
+        "document.querySelectorAll('.model-table tbody tr').length === 1 && Boolean(document.querySelector('.catalog-model-name[title=fixture-responses-only]'))",
+      ),
+    )
+    assert(
+      await javascript(
+        "Array.from(document.querySelectorAll('.model-actions button')).every(button => button.getAttribute('aria-label')?.startsWith('Test '))",
       ),
     )
     await capture("native-models")
     await click('[data-testid="nav-agents"]')
+    await click("#agent-tab-opencode")
+    const openCodeFolder = path.join(
+      options.homeDirectory,
+      ".config",
+      "opencode",
+    )
+    assert.equal(await fs.stat(openCodeFolder).catch(() => null), null)
+    await click('[data-testid="open-config-folder"]')
+    await waitFor(
+      "native configuration folder handler",
+      async () =>
+        (await fs.stat(openCodeFolder).catch(() => null))?.isDirectory()
+        === true,
+    )
+    checks.push(
+      "Rendered Open configuration folder invokes the native handler for the selected agent",
+    )
+    const files = await seedNativeAgentFiles(options.homeDirectory)
+    const codexFile = files.find((file) => file.target === "codex")
+    const claudeFile = files.find((file) => file.target === "claude-code")
+    const openCodeFile = files.find((file) => file.target === "opencode")
+    assert(codexFile && claudeFile && openCodeFile)
     await click("#agent-tab-codex")
+    await click('[data-testid="inspect-agent-config"]')
+    await waitFor("existing Codex model inspection", () =>
+      javascript(
+        "document.querySelector('[data-testid=configured-agent-model]')?.value === 'fixture-responses-only'",
+      ),
+    )
+    await click('[data-testid="configure-agent"]')
+    await waitFor("Codex configuration", () =>
+      controller
+        .snapshot()
+        .agentConfigs.some(
+          (config) =>
+            config.target === "codex" && config.status === "configured",
+        ),
+    )
+    const codexConfig = controller
+      .snapshot()
+      .agentConfigs.find((config) => config.target === "codex")
+    assert(codexConfig)
+    assert.equal(codexConfig.path, codexFile.path)
+    const beforeRepeat = await verifyNativeAgentFile(codexFile)
+    assert(beforeRepeat.includes(gatewayKey))
+    assert(!beforeRepeat.includes("fixture_github_token"))
+    assert(
+      await javascript(
+        "(async () => { await window.copilotProxy.invoke({ kind: 'configure-agent', target: 'codex' }); return true; })()",
+      ),
+    )
+    assert.equal(await fs.readFile(codexConfig.path, "utf8"), beforeRepeat)
+    assert(
+      await javascript(
+        `document.querySelector('[data-testid=agent-proxy-url]')?.value === ${JSON.stringify(connected.connection?.apiUrl)}`,
+      ),
+    )
     await click('[data-testid="copy-config"]')
-    await waitFor("native configuration clipboard", async () =>
-      (await clipboard.readText()).includes('wire_api="responses"'),
+    await waitFor(
+      "native configuration clipboard",
+      async () => (await clipboard.readText()).trim() === "codex",
     )
     const copiedConfiguration = await clipboard.readText()
-    assert(copiedConfiguration.includes(gatewayKey))
+    assert(
+      copiedConfiguration.trim() === "codex",
+      "Native copy returns the configured Codex launch command",
+    )
     assert(!copiedConfiguration.includes("fixture_github_token"))
+    await capture("native-agent-codex")
     checks.push(
-      "Rendered agent setup copies an authenticated Responses configuration to the native clipboard",
+      "Rendered Codex Configure preserves its model, TOML comments, MCP server, permissions and repeated contents, and copies its normal command",
+    )
+    await click("#agent-tab-claude-code")
+    await click('[data-testid="inspect-agent-config"]')
+    await waitFor("existing Claude alias inspection", () =>
+      javascript(
+        "document.querySelector('[data-testid=configured-agent-model]')?.value === 'fixture-claude-sonnet[1m]' && document.querySelector('[data-testid=configured-agent-model]')?.readOnly === true",
+      ),
+    )
+    await click('[data-testid="configure-agent"]')
+    await waitFor("Claude configuration", () =>
+      controller
+        .snapshot()
+        .agentConfigs.some(
+          (config) =>
+            config.target === "claude-code" && config.status === "configured",
+        ),
+    )
+    const claudeConfig = controller
+      .snapshot()
+      .agentConfigs.find((config) => config.target === "claude-code")
+    assert(claudeConfig?.model.kind === "configured")
+    assert.equal(claudeConfig.path, claudeFile.path)
+    assert.equal(claudeConfig.model.exact, "fixture-claude-sonnet[1m]")
+    assert(codexConfig.model.kind === "configured")
+    assert.notEqual(claudeConfig.model.exact, codexConfig.model.exact)
+    const beforeModels = await verifyNativeAgentFile(claudeFile)
+    assert(
+      await javascript(
+        `document.querySelector('[data-testid=agent-proxy-url]')?.value === ${JSON.stringify(connected.connection?.rootUrl)}`,
+      ),
+    )
+    await click('[data-testid="copy-config"]')
+    await waitFor(
+      "native Claude launch command",
+      async () => (await clipboard.readText()).trim() === "claude",
+    )
+    await capture("native-agent-claude")
+    checks.push(
+      "Rendered Claude setup preserves its exact [1m] alias, settings and root URL, independently of Codex",
+    )
+
+    await click("#agent-tab-opencode")
+    await click('[data-testid="inspect-agent-config"]')
+    await waitFor("OpenCode missing model", () =>
+      javascript(
+        "document.querySelector('#agent-model') instanceof HTMLSelectElement",
+      ),
+    )
+    const previousChoices = controller.snapshot().settings.agentModelChoices
+    await input("#agent-model", "fixture-fast")
+    await waitFor(
+      "independent OpenCode proposal",
+      () =>
+        controller.snapshot().settings.agentModelChoices.opencode
+        === "fixture-fast",
+    )
+    assert.equal(
+      controller.snapshot().settings.agentModelChoices["claude-code"],
+      previousChoices["claude-code"],
+    )
+    assert.equal(
+      controller.snapshot().settings.agentModelChoices.codex,
+      previousChoices.codex,
+    )
+    await click('[data-testid="configure-agent"]')
+    await waitFor("OpenCode configuration", () =>
+      controller
+        .snapshot()
+        .agentConfigs.some(
+          (config) =>
+            config.target === "opencode"
+            && config.status === "configured"
+            && config.model.kind === "configured"
+            && config.model.exact === "copilot_proxy/fixture-fast",
+        ),
+    )
+    const beforeOpenCodeRepeat = await verifyNativeAgentFile(openCodeFile)
+    assert(
+      await javascript(
+        "(async () => { await window.copilotProxy.invoke({ kind: 'configure-agent', target: 'opencode' }); return true; })()",
+      ),
+    )
+    assert.equal(
+      await fs.readFile(openCodeFile.path, "utf8"),
+      beforeOpenCodeRepeat,
+    )
+    await click('[data-testid="copy-config"]')
+    await waitFor(
+      "native OpenCode launch command",
+      async () => (await clipboard.readText()).trim() === "opencode",
+    )
+    await capture("native-agent-opencode")
+    checks.push(
+      "Rendered OpenCode Configure adds its own missing model and preserves its symlink, comments, permissions, MCP settings and repeated contents",
+    )
+
+    await click("#agent-tab-curl")
+    await input("#agent-model", "fixture-responses-only")
+    await waitFor("HTTP Responses preview", () =>
+      javascript(
+        "document.querySelector('.configuration-preview pre')?.textContent.includes('fixture-responses-only') === true",
+      ),
+    )
+    assert(
+      await javascript(
+        `document.querySelector('.code-toolbar')?.textContent.includes(${JSON.stringify(`${originalBase}/responses`)}) === true && !document.body.innerText.includes(${JSON.stringify(gatewayKey)})`,
+      ),
+    )
+    await capture("native-http-preview")
+    await click('[data-testid="copy-config"]')
+    await waitFor("private HTTP request clipboard", async () =>
+      (await clipboard.readText()).includes(gatewayKey),
+    )
+    const copiedRequest = await clipboard.readText()
+    assert(copiedRequest.includes(`${originalBase}/responses`))
+    assert(!copiedRequest.includes("fixture_github_token"))
+    if (process.platform !== "win32") {
+      const result = await promisify(execFile)(
+        "/bin/sh",
+        ["-c", copiedRequest],
+        {
+          cwd: options.homeDirectory,
+          timeout: 15_000,
+        },
+      ).catch(() => {
+        throw new Error("The copied HTTP request failed in the POSIX shell.")
+      })
+      const response: unknown = JSON.parse(result.stdout)
+      assert.equal(
+        z.object({ output_text: z.string() }).parse(response).output_text,
+        "Copilot Proxy is connected.",
+      )
+    }
+    checks.push(
+      "HTTP preview hides the local key and Copy request uses the actual connection and Responses model",
+    )
+
+    await click('[data-testid="nav-models"]')
+    await click('[data-testid="nav-agents"]')
+    assert.equal(await fs.readFile(claudeConfig.path, "utf8"), beforeModels)
+    assert.equal(await fs.readFile(codexConfig.path, "utf8"), beforeRepeat)
+    assert.equal(
+      await fs.readFile(openCodeFile.path, "utf8"),
+      beforeOpenCodeRepeat,
+    )
+    checks.push(
+      "Agent models remain independent and catalog navigation changes no configured file",
     )
     await capture("native-agent-setup")
 
@@ -400,29 +729,11 @@ export async function runNativeSmoke(options: {
       "Rendered Sign out stops the child and clears account/model state",
     )
     assert.equal(controller.snapshot().models.length, 0)
-    await fs.writeFile(
-      path.join(outputDirectory, "smoke.json"),
-      JSON.stringify(
-        {
-          passed: true,
-          mode: "fixture",
-          platform: process.platform,
-          electron: process.versions.electron,
-          node: process.versions.node,
-          startedAt,
-          completedAt: new Date().toISOString(),
-          checks,
-          limitations: [
-            "Controlled upstream services; no live Copilot inference or GitHub consent",
-            "Session-only fixture vault; OS credential encryption requires a live user session",
-          ],
-        },
-        null,
-        2,
-      ) + "\n",
-    )
+    await writeReport()
   } catch (error) {
     await capture("native-failure").catch(() => undefined)
     throw error
+  } finally {
+    await clipboard.writeText(originalClipboard)
   }
 }

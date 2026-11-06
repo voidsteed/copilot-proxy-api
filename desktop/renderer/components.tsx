@@ -187,8 +187,8 @@ const compactFormatter = new Intl.NumberFormat("en", {
   maximumFractionDigits: 1,
 })
 
-export function formatNumber(value: number): string {
-  return numberFormatter.format(value)
+export function formatNumber(value: number | null): string {
+  return value === null ? "—" : numberFormatter.format(value)
 }
 
 export function formatLimit(value: number | null): string {
@@ -207,17 +207,44 @@ export function formatDuration(value: number): string {
     : `${(value / 1000).toFixed(1)} s`
 }
 
-export function formatTime(value: string): string {
+function displayDate(value: string): Date | null {
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? "Unknown" : (
-      date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+  if (Number.isNaN(date.getTime())) return null
+  const calendar = /^(\d{4}-\d{2}-\d{2})(?:$|T)/.exec(value)?.[1]
+  if (calendar) {
+    const day = new Date(`${calendar}T00:00:00Z`)
+    if (
+      Number.isNaN(day.getTime())
+      || day.toISOString().slice(0, 10) !== calendar
+    )
+      return null
+  }
+  return date
+}
+
+export function formatDateTime(value: string): string {
+  const date = displayDate(value)
+  return date === null ? "Unknown" : (
+      date.toLocaleString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
     )
 }
 
 export function formatDate(value: string): string {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? "Unknown" : (
-      date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+  const date = displayDate(value)
+  return date === null ? "Unknown" : (
+      date.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        ...(/^\d{4}-\d{2}-\d{2}$/.test(value) ? { timeZone: "UTC" } : {}),
+      })
     )
 }
 
@@ -234,6 +261,9 @@ export function gatewayStatus(gateway: DesktopSnapshot["gateway"]): {
     }
     case "stopping": {
       return { label: "Stopping", tone: "warning" }
+    }
+    case "draining": {
+      return { label: "Finishing requests", tone: "warning" }
     }
     case "error": {
       return { label: "Needs attention", tone: "error" }

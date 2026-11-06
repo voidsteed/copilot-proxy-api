@@ -2,12 +2,27 @@ import { describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { z } from "zod"
 
-import type { AgentTarget, DesktopModel } from "../shared/contracts"
+import type {
+  AgentConfigView,
+  AgentTarget,
+  ConfigurableAgent,
+  DesktopModel,
+} from "../shared/contracts"
 
+import { nativeConnectionSchema } from "../../src/lib/proxy-contracts"
 import { createConnectionSnippet, supportsAgent } from "../shared/connections"
 
 const modelId = 'fixture/model\'s $(printf MODEL_INJECTED) "preview"'
 const apiKey = "fixture_key's $(printf KEY_INJECTED) 01234567890123456789"
+const connection = nativeConnectionSchema.parse({
+  rootUrl: "http://localhost:43219",
+  apiUrl: "http://localhost:43219/v1",
+  authentication: { kind: "keyed", key: apiKey },
+})
+const unkeyedConnection = nativeConnectionSchema.parse({
+  ...connection,
+  authentication: { kind: "none" },
+})
 const model: DesktopModel = {
   id: modelId,
   name: "Fixture model's preview",
@@ -39,6 +54,13 @@ const payloadSchema = z.union([
   z.object({ model: z.string(), input: z.string().min(1) }).strict(),
 ])
 const posixStubs = String.raw`
+COPILOT_PROXY_API_KEY=''
+ANTHROPIC_BASE_URL=''
+ANTHROPIC_AUTH_TOKEN=''
+ANTHROPIC_MODEL=''
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=''
+DISABLE_NON_ESSENTIAL_MODEL_CALLS=''
+OPENCODE_CONFIG_CONTENT=''
 record() { printf '%s\0' "$@"; }
 claude() {
   record claude "$ANTHROPIC_BASE_URL" "$ANTHROPIC_AUTH_TOKEN" "$ANTHROPIC_MODEL" \
@@ -53,8 +75,7 @@ function snippet(target: AgentTarget, selectedModel = model): string {
   return createConnectionSnippet({
     target,
     model: selectedModel,
-    port: 43219,
-    apiKey,
+    connection,
     shell: "posix",
   })
 }
@@ -80,7 +101,7 @@ describe.skipIf(!posixShell)("executable POSIX connection snippets", () => {
   test("Claude Code receives the local gateway and literal credentials and model", () => {
     expect(executePosix(snippet("claude-code"))).toEqual([
       "claude",
-      "http://127.0.0.1:43219",
+      "http://localhost:43219",
       apiKey,
       modelId,
       "1",
@@ -104,7 +125,7 @@ describe.skipIf(!posixShell)("executable POSIX connection snippets", () => {
       model_providers: {
         copilot_proxy: {
           name: "Copilot Proxy",
-          base_url: "http://127.0.0.1:43219/v1",
+          base_url: "http://localhost:43219/v1",
           env_key: "COPILOT_PROXY_API_KEY",
           wire_api: "responses",
         },
@@ -125,7 +146,7 @@ describe.skipIf(!posixShell)("executable POSIX connection snippets", () => {
         copilot_proxy: {
           npm: "@ai-sdk/openai-compatible",
           name: "Copilot Proxy",
-          options: { baseURL: "http://127.0.0.1:43219/v1", apiKey },
+          options: { baseURL: "http://localhost:43219/v1", apiKey },
           models: {
             [modelId]: {
               name: "Fixture model's preview",
@@ -157,7 +178,7 @@ describe.skipIf(!posixShell)("executable POSIX connection snippets", () => {
       )
       expect(observed.slice(0, -1)).toEqual([
         "curl",
-        `http://127.0.0.1:43219/v1/${entry.endpoint}`,
+        `http://localhost:43219/v1/${entry.endpoint}`,
         "-H",
         `Authorization: Bearer ${apiKey}`,
         "-H",
@@ -190,8 +211,7 @@ test.skipIf(!powershell)(
     const source = createConnectionSnippet({
       target: "claude-code",
       model,
-      port: 43219,
-      apiKey,
+      connection,
       shell: "powershell",
     })
     const stub = `function claude {
@@ -210,6 +230,155 @@ test.skipIf(!powershell)(
     expect(child.status).toBe(0)
     expect(child.stderr).toBe("")
     const observed: unknown = JSON.parse(child.stdout)
-    expect(observed).toEqual(["http://127.0.0.1:43219", apiKey, modelId])
+    expect(observed).toEqual(["http://localhost:43219", apiKey, modelId])
   },
 )
+
+function savedConfig(target: ConfigurableAgent): AgentConfigView {
+  return {
+    target,
+    path: `/fixture/${target}/config`,
+    status: "configured",
+    model: {
+      kind: "configured",
+      exact:
+        target === "claude-code" ? "claude-sonnet-5.5[1m]" : "operator-model",
+      catalogId: null,
+    },
+    rootUrl:
+      target === "claude-code" ?
+        "http://localhost:43219/"
+      : "http://localhost:43219",
+    apiUrl: target === "claude-code" ? null : "http://localhost:43219/v1/",
+    authenticationPresent: true,
+    missingFields: [],
+    conflictFields: [],
+  }
+}
+
+test.each([
+  { target: "claude-code", command: "claude" },
+  { target: "codex", command: "codex" },
+  { target: "opencode", command: "opencode" },
+] satisfies Array<{ target: ConfigurableAgent; command: string }>)(
+  "$target uses its existing configuration even when its catalog entry is unknown",
+  ({ target, command }) => {
+    expect(
+      createConnectionSnippet({
+        target,
+        connection,
+        shell: "posix",
+        model: { ...model, endpoints: [] },
+        agentConfig: savedConfig(target),
+      }),
+    ).toBe(command)
+  },
+)
+
+test("refuses to override an existing configuration that points at another proxy", () => {
+  const agentConfig = {
+    ...savedConfig("claude-code"),
+    rootUrl: "http://localhost:4142",
+  }
+  expect(() =>
+    createConnectionSnippet({
+      target: "claude-code",
+      connection,
+      shell: "posix",
+      model,
+      agentConfig,
+    }),
+  ).toThrow("does not match")
+})
+
+test.each(["conflicting", "invalid"] satisfies Array<
+  AgentConfigView["status"]
+>)(
+  "refuses a $1 configuration instead of generating synthetic overrides",
+  (status) => {
+    expect(() =>
+      createConnectionSnippet({
+        target: "codex",
+        connection,
+        shell: "posix",
+        model,
+        agentConfig: { ...savedConfig("codex"), status },
+      }),
+    ).toThrow("existing configuration")
+  },
+)
+
+test("keeps a saved Claude model alias when generating missing connection settings", () => {
+  const agentConfig: AgentConfigView = {
+    ...savedConfig("claude-code"),
+    status: "missing",
+    rootUrl: null,
+    missingFields: ["env.ANTHROPIC_BASE_URL"],
+  }
+  const source = createConnectionSnippet({
+    target: "claude-code",
+    connection,
+    shell: "posix",
+    model,
+    modelId: "another-model",
+    agentConfig,
+  })
+  expect(executePosix(source).slice(0, 4)).toEqual([
+    "claude",
+    connection.rootUrl,
+    apiKey,
+    "claude-sonnet-5.5[1m]",
+  ])
+})
+
+describe.skipIf(!posixShell)("unkeyed proxy snippets", () => {
+  test("Codex receives no invented environment key or auth requirement", () => {
+    const source = createConnectionSnippet({
+      target: "codex",
+      connection: unkeyedConnection,
+      shell: "posix",
+      model,
+    })
+    expect(source).not.toContain("env_key")
+    expect(source).not.toContain("export COPILOT_PROXY_API_KEY")
+    expect(executePosix(source).slice(0, 2)).toEqual(["codex", ""])
+  })
+
+  test("OpenCode receives the current API URL without a fabricated key", () => {
+    const source = createConnectionSnippet({
+      target: "opencode",
+      connection: unkeyedConnection,
+      shell: "posix",
+      model,
+    })
+    const observed = executePosix(source)
+    const config: unknown = JSON.parse(observed[1] ?? "")
+    expect(config).toMatchObject({
+      provider: {
+        copilot_proxy: { options: { baseURL: unkeyedConnection.apiUrl } },
+      },
+    })
+    expect(JSON.stringify(config)).not.toContain("apiKey")
+  })
+
+  test("HTTP uses the current endpoint and sends no unnecessary auth header", () => {
+    const source = createConnectionSnippet({
+      target: "curl",
+      connection: unkeyedConnection,
+      shell: "posix",
+      model,
+    })
+    const observed = executePosix(source)
+    expect(observed.slice(0, -1)).toEqual([
+      "curl",
+      `${unkeyedConnection.apiUrl}/chat/completions`,
+      "-H",
+      "Content-Type: application/json",
+      "--data-raw",
+    ])
+    expect(source).not.toContain("Authorization")
+    expect(payloadSchema.parse(JSON.parse(observed.at(-1) ?? "")).model).toBe(
+      modelId,
+    )
+  })
+})

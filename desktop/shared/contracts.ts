@@ -1,5 +1,50 @@
 import { z } from "zod"
 
+import type { CatalogModel } from "../../src/lib/proxy-contracts"
+
+import {
+  activitySchema,
+  agentConfigViewSchema,
+  agentModelChoicesSchema,
+  agentTargetSchema,
+  authorizationSchema,
+  configurableAgentSchema,
+  configureResultSchema,
+  modelSchema,
+  proxySourceSchema,
+  publicConnectionSchema,
+  runtimeOptionsSchema,
+  totalsSchema,
+  usageSchema,
+} from "../../src/lib/proxy-contracts"
+
+export {
+  activitySchema,
+  agentConfigViewSchema,
+  agentModelChoicesSchema,
+  agentTargetSchema,
+  authorizationSchema,
+  configurableAgentSchema,
+  configureResultSchema,
+  modelSchema,
+  proxySourceSchema,
+  publicConnectionSchema,
+  runtimeOptionsSchema,
+  totalsSchema,
+  usageSchema,
+} from "../../src/lib/proxy-contracts"
+export type {
+  ActivityRecord,
+  AgentConfigView,
+  AgentModel,
+  AgentModelChoices,
+  AgentTarget,
+  ConfigurableAgent,
+  ConfigureResult,
+  ProxySource,
+  PublicConnection,
+} from "../../src/lib/proxy-contracts"
+
 export const settingsSchema = z
   .object({
     port: z.number().int().min(1024).max(65535).default(4141),
@@ -11,6 +56,11 @@ export const settingsSchema = z
     closeToTray: z.boolean().default(true),
     theme: z.enum(["system", "light", "dark"]).default("system"),
     preferredModel: z.string().max(200).default(""),
+    agentModelChoices: agentModelChoicesSchema.default({
+      "claude-code": null,
+      codex: null,
+      opencode: null,
+    }),
     shell: z.enum(["posix", "powershell"]).default("posix"),
   })
   .strict()
@@ -19,12 +69,13 @@ export type DesktopSettings = z.infer<typeof settingsSchema>
 
 export const accountSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("signed-out") }),
+  z.object({ kind: z.literal("external-unverified") }),
   z.object({ kind: z.literal("connecting") }),
   z.object({
     kind: z.literal("awaiting-authorization"),
     code: z.string(),
     verificationUri: z.string(),
-    expiresAt: z.string(),
+    expiresAt: z.iso.datetime({ offset: true }),
   }),
   z.object({
     kind: z.literal("signed-in"),
@@ -44,56 +95,14 @@ export const gatewaySchema = z.discriminatedUnion("kind", [
     startedAt: z.string(),
   }),
   z.object({ kind: z.literal("stopping") }),
+  z.object({
+    kind: z.literal("draining"),
+    inFlight: z.number().int().nonnegative(),
+  }),
   z.object({ kind: z.literal("error"), message: z.string() }),
 ])
 
-export const modelSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  vendor: z.string(),
-  contextWindow: z.number().nullable(),
-  maxOutput: z.number().nullable(),
-  supports: z.array(z.enum(["tools", "vision", "reasoning", "streaming"])),
-  endpoints: z.array(z.string()),
-  preview: z.boolean(),
-})
-
-export type DesktopModel = z.infer<typeof modelSchema>
-
-const quotaSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("limited"),
-    id: z.string(),
-    label: z.string(),
-    remaining: z.number(),
-    limit: z.number(),
-    percentRemaining: z.number().min(0).max(100),
-  }),
-  z.object({ kind: z.literal("unlimited"), id: z.string(), label: z.string() }),
-])
-
-export const usageSchema = z.object({
-  plan: z.string(),
-  resetAt: z.string().nullable(),
-  fetchedAt: z.string(),
-  quotas: z.array(quotaSchema),
-})
-
-export const activitySchema = z.object({
-  id: z.string(),
-  startedAt: z.string(),
-  method: z.string(),
-  path: z.string(),
-  model: z.string().nullable(),
-  status: z.number(),
-  outcome: z.enum(["completed", "failed", "cancelled"]),
-  durationMs: z.number(),
-  inputTokens: z.number().nullable(),
-  outputTokens: z.number().nullable(),
-  cachedTokens: z.number().nullable(),
-})
-
-export type ActivityRecord = z.infer<typeof activitySchema>
+export type DesktopModel = CatalogModel
 
 export const probeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("idle") }),
@@ -114,19 +123,19 @@ export const snapshotSchema = z.object({
   fixture: z.boolean(),
   storageMode: z.enum(["encrypted", "session-only"]),
   account: accountSchema,
+  authorization: authorizationSchema.default({ kind: "idle" }),
   gateway: gatewaySchema,
+  connection: publicConnectionSchema.nullable().default(null),
+  source: proxySourceSchema.default({ kind: "none" }),
+  runtime: runtimeOptionsSchema.nullable().default(null),
   settings: settingsSchema,
+  agentConfigs: z.array(agentConfigViewSchema).default([]),
+  lastConfigureResult: configureResultSchema.nullable().default(null),
   models: z.array(modelSchema),
   modelsFetchedAt: z.string().nullable(),
   usage: usageSchema.nullable(),
   activity: z.array(activitySchema),
-  totals: z.object({
-    requests: z.number().nonnegative(),
-    errors: z.number().nonnegative(),
-    inputTokens: z.number().nonnegative(),
-    outputTokens: z.number().nonnegative(),
-    cachedTokens: z.number().nonnegative(),
-  }),
+  totals: totalsSchema,
   probe: probeSchema,
   notice: z
     .object({
@@ -137,14 +146,6 @@ export const snapshotSchema = z.object({
 })
 
 export type DesktopSnapshot = z.infer<typeof snapshotSchema>
-
-export const agentTargetSchema = z.enum([
-  "claude-code",
-  "codex",
-  "opencode",
-  "curl",
-])
-export type AgentTarget = z.infer<typeof agentTargetSchema>
 
 export const commandSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("sign-in") }).strict(),
@@ -164,6 +165,31 @@ export const commandSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("select-model"),
       modelId: z.string().min(1).max(200),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("select-agent-model"),
+      target: configurableAgentSchema,
+      modelId: z.string().min(1).max(200),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("inspect-agent-config"),
+      target: configurableAgentSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("configure-agent"),
+      target: configurableAgentSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("open-config-folder"),
+      target: configurableAgentSchema,
     })
     .strict(),
   z

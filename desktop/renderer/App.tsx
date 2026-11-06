@@ -47,6 +47,34 @@ export interface ViewProps {
   pending: PendingCommands
 }
 
+type AuthorizationFlow =
+  | { kind: "idle" }
+  | { kind: "connecting" | "validating" }
+  | Pick<
+      Extract<DesktopSnapshot["authorization"], { kind: "awaiting" }>,
+      "kind" | "code" | "verificationUri" | "expiresAt"
+    >
+  | Pick<
+      Extract<DesktopSnapshot["authorization"], { kind: "error" }>,
+      "kind" | "message"
+    >
+
+function authorizationFlow(
+  snapshot: DesktopSnapshot | null,
+): AuthorizationFlow {
+  if (!snapshot) return { kind: "idle" }
+  if (snapshot.authorization.kind !== "idle") return snapshot.authorization
+  if (snapshot.account.kind === "connecting") return { kind: "connecting" }
+  if (snapshot.account.kind === "awaiting-authorization")
+    return {
+      kind: "awaiting",
+      code: snapshot.account.code,
+      verificationUri: snapshot.account.verificationUri,
+      expiresAt: snapshot.account.expiresAt,
+    }
+  return { kind: "idle" }
+}
+
 export function App() {
   const desktop = useDesktop()
   const [view, setView] = useState<View>("overview")
@@ -75,9 +103,11 @@ export function App() {
   const status = snapshot ? gatewayStatus(snapshot.gateway) : null
   const signedIn = snapshot?.account.kind === "signed-in"
   const account = snapshot?.account
+  const authorization = authorizationFlow(snapshot)
   const signInBusy =
-    account?.kind === "connecting"
-    || account?.kind === "awaiting-authorization"
+    authorization.kind === "connecting"
+    || authorization.kind === "awaiting"
+    || authorization.kind === "validating"
     || desktop.pending.has("sign-in")
 
   const openTest = (modelId = "") => {
@@ -108,7 +138,7 @@ export function App() {
                 Gateway {status.label.toLowerCase()}
               </Badge>
             )}
-            {signedIn ?
+            {signedIn || snapshot?.connection ?
               <Button
                 icon={RefreshCw}
                 variant="ghost"
@@ -260,9 +290,6 @@ export function App() {
                     snapshot={snapshot}
                     run={desktop.run}
                     pending={desktop.pending}
-                    onSetUp={() => {
-                      setView("agents")
-                    }}
                     onProbe={openTest}
                   />
                 )}
@@ -302,20 +329,22 @@ export function App() {
           {desktop.confirmation}
         </div>
       )}
-      {snapshot
-        && (snapshot.account.kind === "connecting"
-          || snapshot.account.kind === "awaiting-authorization") && (
-          <SignInDialog
-            snapshot={snapshot}
-            run={desktop.run}
-            pending={desktop.pending}
-          />
-        )}
+      {snapshot && authorization.kind !== "idle" && (
+        <SignInDialog
+          run={desktop.run}
+          pending={desktop.pending}
+          authorization={authorization}
+        />
+      )}
     </div>
   )
 }
 
-function SignInDialog({ snapshot, run, pending }: ViewProps) {
+function SignInDialog({
+  run,
+  pending,
+  authorization,
+}: Pick<ViewProps, "run" | "pending"> & { authorization: AuthorizationFlow }) {
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
     const timer = globalThis.setInterval(() => {
@@ -325,21 +354,15 @@ function SignInDialog({ snapshot, run, pending }: ViewProps) {
       globalThis.clearInterval(timer)
     }
   }, [])
-  const account = snapshot.account
   const cancel = () => {
     void run({ kind: "cancel-sign-in" })
   }
-  if (
-    account.kind !== "connecting"
-    && account.kind !== "awaiting-authorization"
-  )
-    return null
+  if (authorization.kind === "idle") return null
   const remaining =
-    account.kind === "awaiting-authorization" ?
-      Math.max(0, Math.ceil((Date.parse(account.expiresAt) - now) / 1000))
+    authorization.kind === "awaiting" ?
+      Math.max(0, Math.ceil((Date.parse(authorization.expiresAt) - now) / 1000))
     : 0
-  const expired = account.kind === "awaiting-authorization" && remaining <= 0
-
+  const expired = authorization.kind === "awaiting" && remaining <= 0
   return (
     <Dialog
       title="Sign in with GitHub"
@@ -353,7 +376,7 @@ function SignInDialog({ snapshot, run, pending }: ViewProps) {
           >
             Cancel
           </Button>
-          {account.kind === "awaiting-authorization" && (
+          {authorization.kind === "awaiting" && (
             <Button
               variant="primary"
               icon={Github}
@@ -366,22 +389,47 @@ function SignInDialog({ snapshot, run, pending }: ViewProps) {
               Open GitHub
             </Button>
           )}
+          {authorization.kind === "error" && (
+            <Button
+              variant="primary"
+              icon={Github}
+              busy={pending.has("sign-in")}
+              onClick={() => {
+                void run({ kind: "sign-in" })
+              }}
+            >
+              Try sign-in again
+            </Button>
+          )}
         </>
       }
     >
       <div className="sign-in-icon">
         <Github size={29} strokeWidth={1.6} aria-hidden="true" />
       </div>
-      {account.kind === "connecting" ?
+      {(authorization.kind === "connecting"
+        || authorization.kind === "validating") && (
         <div className="connecting-state" role="status">
           <LoaderCircle size={21} className="spin" />
-          <p>Requesting your device code…</p>
+          <p>
+            {authorization.kind === "validating" ?
+              "Checking your Copilot access…"
+            : "Requesting your device code…"}
+          </p>
         </div>
-      : <>
+      )}
+      {authorization.kind === "error" && (
+        <div className="notice notice-error" role="alert">
+          <TriangleAlert size={17} aria-hidden="true" />
+          <p>{authorization.message}</p>
+        </div>
+      )}
+      {authorization.kind === "awaiting" && (
+        <>
           <p className="dialog-intro">
             Enter this code on GitHub to connect your Copilot account.
           </p>
-          <div className="device-code">{account.code}</div>
+          <div className="device-code">{authorization.code}</div>
           <Button
             className="copy-device-code"
             icon={Copy}
@@ -415,7 +463,7 @@ function SignInDialog({ snapshot, run, pending }: ViewProps) {
             </p>
           )}
         </>
-      }
+      )}
     </Dialog>
   )
 }
@@ -433,7 +481,6 @@ function Sidebar({
   signInBusy: boolean
   run: RunCommand
 }) {
-  const account = snapshot?.account
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -466,48 +513,89 @@ function Sidebar({
         ))}
       </nav>
       <div className="sidebar-bottom">
-        {account?.kind === "signed-in" ?
-          <button
-            className="account-switch"
-            type="button"
-            aria-label={`Account settings for ${account.login}`}
-            onClick={() => {
-              onNavigate("settings")
-            }}
-          >
-            <div className="account-avatar">
-              {account.login.slice(0, 1).toUpperCase()}
-            </div>
-            <div>
-              <strong>{account.login}</strong>
-              <span>{account.plan || "GitHub Copilot"}</span>
-            </div>
-            <ChevronRight size={14} aria-hidden="true" />
-          </button>
-        : <button
-            className="account-switch"
-            type="button"
-            aria-label="Sign in with GitHub"
-            disabled={!snapshot || signInBusy}
-            onClick={() => {
-              void run({ kind: "sign-in" })
-            }}
-          >
-            <div className="account-avatar">
-              <Github size={17} aria-hidden="true" />
-            </div>
-            <div>
-              <strong>{signInBusy ? "Connecting…" : "Sign in"}</strong>
-              <span>GitHub Copilot</span>
-            </div>
-            <LogIn size={14} aria-hidden="true" />
-          </button>
-        }
+        <AccountSwitch
+          snapshot={snapshot}
+          signInBusy={signInBusy}
+          run={run}
+          onSettings={() => {
+            onNavigate("settings")
+          }}
+        />
         <div className="sidebar-version">
           <span className="version-dot" />
           Copilot Proxy {snapshot?.version ?? ""}
         </div>
       </div>
     </aside>
+  )
+}
+
+function AccountSwitch({
+  snapshot,
+  signInBusy,
+  run,
+  onSettings,
+}: {
+  snapshot: DesktopSnapshot | null
+  signInBusy: boolean
+  run: RunCommand
+  onSettings: () => void
+}) {
+  const account = snapshot?.account
+  if (account?.kind === "signed-in")
+    return (
+      <button
+        className="account-switch"
+        type="button"
+        aria-label={`Account settings for ${account.login}`}
+        onClick={onSettings}
+      >
+        <div className="account-avatar">
+          {account.login.slice(0, 1).toUpperCase()}
+        </div>
+        <div>
+          <strong>{account.login}</strong>
+          <span>{account.plan || "GitHub Copilot"}</span>
+        </div>
+        <ChevronRight size={14} aria-hidden="true" />
+      </button>
+    )
+  if (account?.kind === "external-unverified")
+    return (
+      <button
+        className="account-switch"
+        type="button"
+        aria-label="CLI proxy settings"
+        onClick={onSettings}
+      >
+        <div className="account-avatar">
+          <Terminal size={17} aria-hidden="true" />
+        </div>
+        <div>
+          <strong>CLI proxy</strong>
+          <span>GitHub Copilot</span>
+        </div>
+        <ChevronRight size={14} aria-hidden="true" />
+      </button>
+    )
+  return (
+    <button
+      className="account-switch"
+      type="button"
+      aria-label="Sign in with GitHub"
+      disabled={!snapshot || signInBusy}
+      onClick={() => {
+        void run({ kind: "sign-in" })
+      }}
+    >
+      <div className="account-avatar">
+        <Github size={17} aria-hidden="true" />
+      </div>
+      <div>
+        <strong>{signInBusy ? "Connecting…" : "Sign in"}</strong>
+        <span>GitHub Copilot</span>
+      </div>
+      <LogIn size={14} aria-hidden="true" />
+    </button>
   )
 }

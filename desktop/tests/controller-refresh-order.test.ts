@@ -291,6 +291,7 @@ describe("native clipboard boundary", () => {
   test("copies the private local key only to native clipboard and validates agent compatibility", async () => {
     const upstream = await upstreamProxy()
     const context = await native({ origin: upstream.origin })
+    await context.controller.invoke({ kind: "start-gateway" })
     await context.controller.invoke({ kind: "copy", target: "gateway-key" })
     expect(context.clipboard.at(-1)).toBe(key)
     await context.controller.invoke({
@@ -357,12 +358,13 @@ describe("credential write ordering", () => {
     await eventually(
       () =>
         context.controller.snapshot().account.kind === "signed-in"
-        && context.stored()?.gatewayKey !== key,
+        && context.stored()?.githubToken === "fixture_github_token"
+        && context.writes.at(-1) === "save",
     )
     expect(signedOut).toBe(false)
     await stopping
-    expect(context.writes).toEqual(["save", "clear", "save"])
-    expect(context.stored()?.gatewayKey).not.toBe(key)
+    expect(context.writes).toEqual(["clear", "save"])
+    expect(context.stored()?.githubToken).toBe("fixture_github_token")
     expect(context.stored()).not.toBeNull()
     expect(context.controller.snapshot().account.kind).toBe("signed-in")
   }, 10_000)

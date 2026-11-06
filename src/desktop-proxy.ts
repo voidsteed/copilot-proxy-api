@@ -1,6 +1,9 @@
 import consola from "consola"
 import { Hono } from "hono"
+import { AsyncLocalStorage } from "node:async_hooks"
 import { timingSafeEqual } from "node:crypto"
+
+import type { RuntimeOverrides } from "./lib/proxy-contracts"
 
 import {
   type CompletedRequestSummary,
@@ -14,19 +17,38 @@ import { responsesRoutes } from "./routes/responses/route"
 
 export function createDesktopProxy(options: {
   port: number
-  gatewayKey: string
+  gatewayKey?: string
+  authentication?: NonNullable<RuntimeOverrides["authentication"]>
   onComplete: (summary: CompletedRequestSummary) => void
 }) {
   consola.level = -999
   const app = new Hono()
-  const key = Buffer.from(options.gatewayKey)
+  const authentication = options.authentication ?? {
+    kind: "keyed",
+    keys: [options.gatewayKey ?? ""],
+  }
+  if (
+    authentication.kind === "keyed"
+    && authentication.keys.some((key) => key.length === 0)
+  )
+    throw new Error("A keyed gateway requires an API key")
+  const keys =
+    authentication.kind === "keyed" ?
+      authentication.keys.map((key) => Buffer.from(key))
+    : []
   const matchesKey = (candidate: string) => {
     const buffer = Buffer.from(candidate)
-    return buffer.length === key.length && timingSafeEqual(buffer, key)
+    return keys.some(
+      (key) => buffer.length === key.length && timingSafeEqual(buffer, key),
+    )
   }
   app.use(async (c, next) => {
     if (
-      c.req.header("host") !== `127.0.0.1:${options.port}`
+      ![
+        `[::1]:${options.port}`,
+        `127.0.0.1:${options.port}`,
+        `localhost:${options.port}`,
+      ].includes(c.req.header("host") ?? "")
       || c.req.raw.headers.has("origin")
     ) {
       return c.json(
@@ -40,9 +62,10 @@ export function createDesktopProxy(options: {
     const apiKey = c.req.header("x-api-key")
     const bearer = authorization?.match(/^Bearer (\S+)$/i)?.[1]
     if (
-      (!authorization && !apiKey)
-      || (authorization !== undefined && (!bearer || !matchesKey(bearer)))
-      || (apiKey !== undefined && !matchesKey(apiKey))
+      authentication.kind === "keyed"
+      && ((!authorization && !apiKey)
+        || (authorization !== undefined && (!bearer || !matchesKey(bearer)))
+        || (apiKey !== undefined && !matchesKey(apiKey)))
     ) {
       return c.json(
         {
@@ -56,7 +79,12 @@ export function createDesktopProxy(options: {
     }
     await next()
   })
-  app.use(createRequestLogMiddleware(() => undefined, options.onComplete))
+  app.use((context, next) =>
+    createRequestLogMiddleware(
+      () => undefined,
+      AsyncLocalStorage.bind(options.onComplete),
+    )(context, next),
+  )
   app.get("/", (c) => c.json({ service: "Copilot Proxy" }))
   for (const prefix of ["", "/v1"]) {
     app.route(`${prefix}/models`, modelRoutes)

@@ -1,5 +1,6 @@
 import { z } from "zod"
 
+import type { NativeConnection } from "../../src/lib/proxy-contracts"
 import type { DesktopModel, DesktopSnapshot } from "../shared/contracts"
 
 const probeReplySchema = z.object({
@@ -38,8 +39,7 @@ function extractProbeText(raw: unknown): string {
 }
 
 export async function executeProbe(options: {
-  baseUrl: string
-  gatewayKey: string
+  connection: NativeConnection
   model: DesktopModel
   prompt: string
   signal: AbortSignal
@@ -50,12 +50,14 @@ export async function executeProbe(options: {
   if (!usesChat && !model.endpoints.includes("/responses"))
     throw new Error("unsupported")
   const response = await fetch(
-    `${options.baseUrl}/${usesChat ? "chat/completions" : "responses"}`,
+    `${options.connection.apiUrl.replace(/\/$/, "")}/${usesChat ? "chat/completions" : "responses"}`,
     {
       method: "POST",
       redirect: "error",
       headers: {
-        authorization: `Bearer ${options.gatewayKey}`,
+        ...(options.connection.authentication.kind === "keyed" ?
+          { authorization: `Bearer ${options.connection.authentication.key}` }
+        : {}),
         "content-type": "application/json",
       },
       body: JSON.stringify(
@@ -85,7 +87,7 @@ export async function executeProbe(options: {
   return {
     kind: "complete",
     model: model.id,
-    text: extractProbeText(JSON.parse(raw) as unknown),
+    text: extractProbeText(JSON.parse(raw)),
     durationMs: performance.now() - started,
   }
 }

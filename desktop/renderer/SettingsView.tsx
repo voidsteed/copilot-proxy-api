@@ -9,17 +9,37 @@ import {
   ShieldCheck,
   Sun,
 } from "lucide-react"
-import { useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 
 import type { DesktopSettings } from "../shared/contracts"
 import type { ViewProps } from "./App"
 
+import { settingsSchema } from "../shared/contracts"
 import { Badge, Button, nextTabIndex } from "./components"
 import { Github } from "./Github"
 
 export function SettingsView({ snapshot, run, pending }: ViewProps) {
   const [draft, setDraft] = useState<DesktopSettings>(snapshot.settings)
   const [port, setPort] = useState(String(snapshot.settings.port))
+  const previousSettings = useRef(snapshot.settings)
+  useEffect(() => {
+    const previous = previousSettings.current
+    if (JSON.stringify(previous) === JSON.stringify(snapshot.settings)) return
+    previousSettings.current = snapshot.settings
+    setDraft((current) => {
+      let next = snapshot.settings
+      for (const key of settingsSchema.keyof().options) {
+        if (JSON.stringify(current[key]) !== JSON.stringify(previous[key]))
+          next = { ...next, [key]: current[key] }
+      }
+      return next
+    })
+    setPort((current) =>
+      current === String(previous.port) ?
+        String(snapshot.settings.port)
+      : current,
+    )
+  }, [snapshot.settings])
   const portNumber = /^\d{1,5}$/.test(port) ? Number(port) : Number.NaN
   const validPort =
     Number.isInteger(portNumber) && portNumber >= 1024 && portNumber <= 65535
@@ -28,6 +48,10 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
     !validPort
     || JSON.stringify(nextSettings) !== JSON.stringify(snapshot.settings)
   const signedIn = snapshot.account.kind === "signed-in"
+  const external = snapshot.source.kind === "legacy-cli"
+  const keyed = snapshot.connection?.authentication.kind === "keyed"
+  let keyLabel = "Not running"
+  if (snapshot.connection) keyLabel = keyed ? "••••••••••••" : "Not required"
   const patch = <K extends keyof DesktopSettings>(
     key: K,
     value: DesktopSettings[K],
@@ -94,7 +118,11 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
           <SettingRow
             label="Local port"
             htmlFor="gateway-port"
-            description="The gateway uses 127.0.0.1 on this computer."
+            description={
+              external ?
+                "This CLI controls its own port."
+              : "The gateway stays on this computer."
+            }
             control={
               <div className="port-control">
                 <input
@@ -103,6 +131,7 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
                   inputMode="numeric"
                   maxLength={5}
                   value={port}
+                  disabled={external}
                   aria-invalid={!validPort}
                   aria-describedby={!validPort ? "port-error" : undefined}
                   onChange={(event) => {
@@ -119,14 +148,22 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
           />
           <SettingRow
             label="Local API key"
-            description="Rotating the key requires updating your connected agents."
+            description={
+              keyed ?
+                "Rotating the key requires updating your connected agents."
+              : "The connected proxy does not require an API key."
+            }
             control={
               <div className="key-controls">
                 <code
                   className="masked-key"
-                  aria-label="Local API key is hidden"
+                  aria-label={
+                    keyed ?
+                      "Local API key is hidden"
+                    : "No local API key required"
+                  }
                 >
-                  ••••••••••••
+                  {keyLabel}
                 </code>
                 <Button
                   icon={Copy}
@@ -134,7 +171,7 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
                   className="icon-button"
                   aria-label="Copy local API key"
                   title="Copy local API key"
-                  disabled={!signedIn}
+                  disabled={!keyed}
                   onClick={() => {
                     void run(
                       { kind: "copy", target: "gateway-key" },
@@ -144,7 +181,7 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
                 />
                 <Button
                   icon={RotateCw}
-                  disabled={!signedIn}
+                  disabled={!signedIn || external || !keyed}
                   busy={pending.has("rotate-key")}
                   onClick={() => {
                     void run(
@@ -169,7 +206,7 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
               <Github size={24} aria-hidden="true" />
             </div>
             <div>
-              {snapshot.account.kind === "signed-in" ?
+              {snapshot.account.kind === "signed-in" && (
                 <>
                   <strong>
                     {snapshot.account.name || snapshot.account.login}
@@ -181,13 +218,22 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
                     </Badge>
                   </span>
                 </>
-              : <>
+              )}
+              {snapshot.account.kind === "external-unverified" && (
+                <>
+                  <strong>Connected through Terminal</strong>
+                  <span>This CLI does not report account details.</span>
+                </>
+              )}
+              {!signedIn && snapshot.account.kind !== "external-unverified" && (
+                <>
                   <strong>No account connected</strong>
                   <span>Sign in with your Copilot subscription.</span>
                 </>
-              }
+              )}
             </div>
-            {signedIn ?
+            {external && <Badge tone="neutral">Managed in Terminal</Badge>}
+            {!external && signedIn && (
               <Button
                 data-testid="sign-out"
                 icon={LogOut}
@@ -199,7 +245,9 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
               >
                 Sign out
               </Button>
-            : <Button
+            )}
+            {!external && !signedIn && (
+              <Button
                 icon={Github}
                 busy={pending.has("sign-in")}
                 onClick={() => {
@@ -208,7 +256,7 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
               >
                 Sign in with GitHub
               </Button>
-            }
+            )}
           </div>
           <SettingRow
             label="Account type"
@@ -216,6 +264,7 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
             control={
               <select
                 id="account-type"
+                disabled={external}
                 value={draft.accountType}
                 onChange={(event) => {
                   const value = event.target.value
@@ -245,8 +294,10 @@ export function SettingsView({ snapshot, run, pending }: ViewProps) {
       </form>
       <p className="footnote">
         <KeyRound size={13} aria-hidden="true" />
-        Your GitHub token stays in the native app. Agents use a separate local
-        key.
+        Your GitHub token stays in the native app.
+        {keyed ?
+          " Agents use a separate local key."
+        : " The connected proxy needs no local key."}
       </p>
     </div>
   )

@@ -5,6 +5,8 @@ import { z } from "zod"
 
 import type { CredentialVault, StoredCredentials } from "./types"
 
+import { runtimeAuthenticationSchema } from "../../src/lib/proxy-contracts"
+
 const credentialsSchema = z
   .object({
     githubToken: z.string().min(1),
@@ -44,6 +46,7 @@ export function createCredentialVault(options: {
         credentials = credentialsSchema.parse(value)
         return Promise.resolve()
       },
+      encodeRuntimeAuthentication: () => Promise.resolve(null),
       async clear() {
         credentials = null
         await clearSavedCredentials(filename)
@@ -97,6 +100,17 @@ export function createCredentialVault(options: {
       }
     },
     save,
+    async encodeRuntimeAuthentication(authentication) {
+      const value = runtimeAuthenticationSchema.parse(authentication)
+      return (await encryption.encrypt(JSON.stringify(value))).toString(
+        "base64",
+      )
+    },
+    async decodeRuntimeAuthentication(ciphertext) {
+      const bytes = Buffer.from(ciphertext, "base64")
+      const decoded = await encryption.decrypt(bytes)
+      return runtimeAuthenticationSchema.parse(JSON.parse(decoded.result))
+    },
     clear: () => clearSavedCredentials(filename),
   }
 }

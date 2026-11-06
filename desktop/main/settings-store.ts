@@ -1,10 +1,24 @@
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { z } from "zod"
 
 import type { ControllerOptions } from "./types"
 
+import {
+  publicAuthenticationSchema,
+  runtimeOptionsSchema,
+} from "../../src/lib/proxy-contracts"
 import { type DesktopSettings, settingsSchema } from "../shared/contracts"
+
+export const nativeRuntimeSettingsSchema = z
+  .object({
+    options: runtimeOptionsSchema,
+    authentication: publicAuthenticationSchema,
+    encryptedAuthentication: z.string().max(262_144).nullable(),
+  })
+  .strict()
+export type NativeRuntimeSettings = z.infer<typeof nativeRuntimeSettingsSchema>
 
 export async function persistSettings(
   options: Pick<ControllerOptions, "applyLoginItem"> & {
@@ -41,31 +55,69 @@ export function createSettingsStore(
   const platformSettings = settingsSchema.extend({
     shell: settingsSchema.shape.shell.default(defaultShell),
   })
+  const fileSchema = platformSettings.extend({
+    nativeRuntime: nativeRuntimeSettingsSchema.optional(),
+  })
   let writes = Promise.resolve()
+  let nativeRuntime: NativeRuntimeSettings | null = null
   return {
-    async load(): Promise<{ settings: DesktopSettings; recovered: boolean }> {
+    async load(): Promise<{
+      settings: DesktopSettings
+      recovered: boolean
+      runtime: NativeRuntimeSettings | null
+    }> {
       try {
         const raw: unknown = JSON.parse(await readFile(path, "utf8"))
-        return { settings: platformSettings.parse(raw), recovered: false }
+        const { nativeRuntime: stored, ...settings } = fileSchema.parse(raw)
+        nativeRuntime = stored ?? null
+        return { settings, recovered: false, runtime: nativeRuntime }
       } catch (error) {
         const missing =
           error instanceof Error && "code" in error && error.code === "ENOENT"
-        return { settings: platformSettings.parse({}), recovered: !missing }
+        return {
+          settings: platformSettings.parse({}),
+          recovered: !missing,
+          runtime: null,
+        }
       }
     },
-    save(settings: DesktopSettings): Promise<void> {
-      const serialized =
-        JSON.stringify(settingsSchema.parse(settings), null, 2) + "\n"
-      const write = writes.then(async () => {
-        await mkdir(dataDirectory, { recursive: true, mode: 0o700 })
-        const temporary = join(dataDirectory, `.settings-${randomUUID()}.tmp`)
-        try {
-          await writeFile(temporary, serialized, { mode: 0o600, flag: "wx" })
-          await rename(temporary, path)
-        } finally {
-          await unlink(temporary).catch(() => undefined)
-        }
-      })
+    runtime(): NativeRuntimeSettings | null {
+      return nativeRuntime && structuredClone(nativeRuntime)
+    },
+    save(
+      settings: DesktopSettings,
+      runtime?: NativeRuntimeSettings | null,
+    ): Promise<void> {
+      const write = writes
+        .then(async () => {
+          const nextRuntime = runtime === undefined ? nativeRuntime : runtime
+          const serialized =
+            JSON.stringify(
+              {
+                ...settingsSchema.parse(settings),
+                ...(nextRuntime ?
+                  {
+                    nativeRuntime:
+                      nativeRuntimeSettingsSchema.parse(nextRuntime),
+                  }
+                : {}),
+              },
+              null,
+              2,
+            ) + "\n"
+          await mkdir(dataDirectory, { recursive: true, mode: 0o700 })
+          const temporary = join(dataDirectory, `.settings-${randomUUID()}.tmp`)
+          try {
+            await writeFile(temporary, serialized, { mode: 0o600, flag: "wx" })
+            await rename(temporary, path)
+            return nextRuntime
+          } finally {
+            await unlink(temporary).catch(() => undefined)
+          }
+        })
+        .then((committed) => {
+          nativeRuntime = committed
+        })
       writes = write.catch(() => undefined)
       return write
     },

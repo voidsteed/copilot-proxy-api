@@ -6,7 +6,7 @@ const root = import.meta.dirname
 export default {
   appId: "com.voidsteed.copilotproxy",
   productName: "Copilot Proxy",
-  buildVersion: "0.0.2.2",
+  buildVersion: "0.0.8.8",
   directories: {
     output: process.env.COPILOT_PROXY_PACKAGE_OUTPUT || "release",
     buildResources: "assets",
@@ -36,7 +36,7 @@ export default {
   npmRebuild: false,
   publish: null,
   mac: {
-    bundleVersion: "2",
+    bundleVersion: "8",
     category: "public.app-category.developer-tools",
     icon: "assets/icon.png",
     hardenedRuntime: true,

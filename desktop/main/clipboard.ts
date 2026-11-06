@@ -1,3 +1,7 @@
+import type {
+  AgentConfigView,
+  NativeConnection,
+} from "../../src/lib/proxy-contracts"
 import type { DesktopCommand, DesktopModel } from "../shared/contracts"
 
 import { createConnectionSnippet, supportsAgent } from "../shared/connections"
@@ -9,65 +13,119 @@ type ClipboardCommand = Extract<
 type ClipboardResult =
   | { kind: "text"; text: string }
   | { kind: "error"; message: string }
-
-export function createClipboardText(options: {
+type ClipboardOptions = {
   command: ClipboardCommand
-  port: number
-  gatewayKey: string | null
+  connection: NativeConnection | null
+  agentConfigs: Array<AgentConfigView>
   deviceCode: string | null
   models: Array<DesktopModel>
-}): ClipboardResult {
-  const { command, gatewayKey, deviceCode } = options
-  if (command.kind === "copy") {
-    const target = command.target
-    switch (target) {
-      case "base-url": {
-        return { kind: "text", text: `http://127.0.0.1:${options.port}/v1` }
-      }
-      case "gateway-key": {
-        return gatewayKey ?
-            { kind: "text", text: gatewayKey }
-          : { kind: "error", message: "Sign in before copying a gateway key." }
-      }
-      case "device-code": {
-        return deviceCode ?
-            { kind: "text", text: deviceCode }
-          : {
-              kind: "error",
-              message: "A device code is available only during sign-in.",
-            }
-      }
-      default: {
-        const exhaustive: never = target
-        return exhaustive
-      }
-    }
-  }
-  const model = options.models.find((item) => item.id === command.modelId)
-  if (!gatewayKey)
+}
+
+function configurationClipboard(
+  options: ClipboardOptions & {
+    command: Extract<ClipboardCommand, { kind: "copy-config" }>
+  },
+): ClipboardResult {
+  const { command, connection } = options
+  if (!connection)
     return {
       kind: "error",
-      message: "Sign in before copying an agent configuration.",
+      message: "Start the proxy before copying an agent configuration.",
     }
-  if (!model)
+  const agentConfig =
+    command.target === "curl" ?
+      undefined
+    : options.agentConfigs.find((view) => view.target === command.target)
+  const configuredModel =
+    agentConfig?.model.kind === "configured" ? agentConfig.model : null
+  const model = options.models.find(
+    (item) => item.id === (configuredModel?.catalogId ?? command.modelId),
+  )
+  const metadata: DesktopModel | undefined =
+    model
+    ?? (configuredModel ?
+      {
+        id: configuredModel.exact,
+        name: "",
+        vendor: "",
+        contextWindow: null,
+        maxOutput: null,
+        supports: [],
+        endpoints: [],
+        preview: false,
+      }
+    : undefined)
+  if (!metadata)
     return {
       kind: "error",
       message: "This model is no longer available. Refresh the model catalog.",
     }
-  if (!supportsAgent(model, command.target))
+  if (
+    agentConfig?.status !== "configured"
+    && !supportsAgent(metadata, command.target)
+  )
     return {
       kind: "error",
       message:
         "This model does not support this agent's API. Choose another model.",
     }
-  return {
-    kind: "text",
-    text: createConnectionSnippet({
-      target: command.target,
-      model,
-      port: options.port,
-      apiKey: gatewayKey,
-      shell: command.shell,
-    }),
+  try {
+    return {
+      kind: "text",
+      text: createConnectionSnippet({
+        target: command.target,
+        connection,
+        model: metadata,
+        modelId: configuredModel?.exact,
+        agentConfig,
+        shell: command.shell,
+      }),
+    }
+  } catch {
+    return {
+      kind: "error",
+      message: "Review this agent's existing configuration before connecting.",
+    }
+  }
+}
+
+export function createClipboardText(
+  options: ClipboardOptions,
+): ClipboardResult {
+  const { command, connection, deviceCode } = options
+  if (command.kind === "copy-config")
+    return configurationClipboard({ ...options, command })
+  switch (command.target) {
+    case "base-url": {
+      return connection ?
+          { kind: "text", text: connection.apiUrl }
+        : {
+            kind: "error",
+            message: "Start the proxy before copying its API URL.",
+          }
+    }
+    case "gateway-key": {
+      return connection?.authentication.kind === "keyed" ?
+          { kind: "text", text: connection.authentication.key }
+        : {
+            kind: "error",
+            message:
+              connection ?
+                "This proxy does not require a local API key."
+              : "Start the proxy before copying its gateway key.",
+          }
+    }
+    case "device-code": {
+      return deviceCode ?
+          { kind: "text", text: deviceCode }
+        : {
+            kind: "error",
+            message: "A device code is available only during sign-in.",
+          }
+    }
+    default: {
+      const exhaustive: never = command
+      return exhaustive
+    }
   }
 }

@@ -11,7 +11,7 @@ import {
   EmptyState,
   formatDuration,
   formatNumber,
-  formatTime,
+  formatDateTime,
   formatTokens,
 } from "./components"
 
@@ -19,9 +19,11 @@ const outcomeTones: Record<ActivityRecord["outcome"], BadgeTone> = {
   completed: "success",
   failed: "error",
   cancelled: "warning",
+  observed: "neutral",
 }
 
 function statusLabel(record: ActivityRecord): string | number {
+  if (record.outcome === "observed") return `${record.status} observed`
   if (record.outcome === "cancelled") return "Cancelled"
   return record.status > 0 ? record.status : "Failed"
 }
@@ -52,12 +54,19 @@ export function ActivityView({
       <div className="view-heading">
         <div>
           <h2>Session activity</h2>
-          <p>{formatNumber(snapshot.totals.requests)} requests this session</p>
+          <p>
+            {snapshot.source.kind === "legacy-cli" ?
+              `${formatNumber(snapshot.activity.length)} recent CLI requests`
+            : `${formatNumber(snapshot.totals.requests)} requests this session`}
+          </p>
         </div>
         <Button
           data-testid="clear-activity"
           icon={Trash2}
-          disabled={snapshot.activity.length === 0}
+          disabled={
+            snapshot.source.kind === "legacy-cli"
+            || snapshot.activity.length === 0
+          }
           busy={pending.has("clear-activity")}
           onClick={() => {
             void run({ kind: "clear-activity" }, "Activity cleared")
@@ -100,6 +109,7 @@ export function ActivityView({
               <option value="completed">Completed</option>
               <option value="failed">Failed</option>
               <option value="cancelled">Cancelled</option>
+              <option value="observed">Observed in CLI</option>
             </select>
           </div>
           <span className="muted table-count">
@@ -113,7 +123,7 @@ export function ActivityView({
             title="No requests yet"
             action={<Button onClick={onTest}>Send a test request</Button>}
           >
-            Completed requests appear here while Copilot Proxy is open.
+            Requests through the connected proxy appear here.
           </EmptyState>
         )}
         {snapshot.activity.length > 0 && filtered.length === 0 && (
@@ -136,6 +146,12 @@ export function ActivityView({
         )}
         {filtered.length > 0 && <RequestTable records={filtered} />}
       </section>
+      {snapshot.source.kind === "legacy-cli" && (
+        <p className="footnote">
+          This CLI reports HTTP status and handler timing. Models, token counts,
+          and stream completion are not reported.
+        </p>
+      )}
       <p className="footnote">
         Session history stores request metadata. Prompts and responses are not
         saved.
@@ -151,7 +167,7 @@ export function RequestTable({
   records: Array<ActivityRecord>
   compact?: boolean
 }) {
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
   return (
     <div className="table-scroll">
@@ -168,13 +184,14 @@ export function RequestTable({
         </thead>
         <tbody>
           {records.map((record) => {
-            const expanded = record.id === expandedId
+            const recordKey = JSON.stringify([record.id, record.startedAt])
+            const expanded = recordKey === expandedKey
             const totalTokens =
               record.inputTokens !== null && record.outputTokens !== null ?
                 record.inputTokens + record.outputTokens
               : null
             return (
-              <Fragment key={record.id}>
+              <Fragment key={recordKey}>
                 <tr className={expanded ? "expanded-row" : undefined}>
                   <td>
                     <button
@@ -183,7 +200,7 @@ export function RequestTable({
                       aria-label={`${expanded ? "Hide" : "Show"} request details ${record.id}`}
                       aria-expanded={expanded}
                       onClick={() => {
-                        setExpandedId(expanded ? null : record.id)
+                        setExpandedKey(expanded ? null : recordKey)
                       }}
                     >
                       <ChevronRight
@@ -193,9 +210,9 @@ export function RequestTable({
                       />
                       <time
                         dateTime={record.startedAt}
-                        title={new Date(record.startedAt).toLocaleString()}
+                        title={record.startedAt}
                       >
-                        {formatTime(record.startedAt)}
+                        {formatDateTime(record.startedAt)}
                       </time>
                     </button>
                   </td>
@@ -204,7 +221,7 @@ export function RequestTable({
                       className="model-cell"
                       title={record.model ?? undefined}
                     >
-                      {record.model ?? "Unknown model"}
+                      {record.model ?? "Not reported"}
                     </span>
                   </td>
                   {!compact && (
@@ -223,7 +240,15 @@ export function RequestTable({
                     {formatTokens(totalTokens)}
                   </td>
                   <td className="numeric tabular muted">
-                    {formatDuration(record.durationMs)}
+                    <span
+                      title={
+                        record.outcome === "observed" ?
+                          "CLI handler time"
+                        : "Request duration"
+                      }
+                    >
+                      {formatDuration(record.durationMs)}
+                    </span>
                   </td>
                 </tr>
                 {expanded && (
@@ -267,12 +292,23 @@ export function RequestTable({
                           <dd>{formatTokens(record.cachedTokens)}</dd>
                         </div>
                         <div>
-                          <dt>Duration</dt>
+                          <dt>
+                            {record.outcome === "observed" ?
+                              "Handler time"
+                            : "Duration"}
+                          </dt>
                           <dd>{formatDuration(record.durationMs)}</dd>
                         </div>
                         <div className="detail-wide">
                           <dt>Started</dt>
-                          <dd>{new Date(record.startedAt).toLocaleString()}</dd>
+                          <dd>
+                            <time
+                              dateTime={record.startedAt}
+                              title={record.startedAt}
+                            >
+                              {formatDateTime(record.startedAt)}
+                            </time>
+                          </dd>
                         </div>
                       </dl>
                     </td>

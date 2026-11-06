@@ -28,7 +28,7 @@ import {
   formatDate,
   formatDuration,
   formatNumber,
-  formatTime,
+  formatDateTime,
   gatewayStatus,
   ModelSelect,
 } from "./components"
@@ -52,16 +52,29 @@ export function OverviewView({
 }: OverviewProps) {
   const { account, gateway } = snapshot
   const signedIn = account.kind === "signed-in"
+  const external = snapshot.source.kind === "legacy-cli"
+  const connected = signedIn || account.kind === "external-unverified"
   const running = gateway.kind === "running"
   const starting = gateway.kind === "starting"
-  const stopping = gateway.kind === "stopping"
+  const stopping = gateway.kind === "stopping" || gateway.kind === "draining"
   const canStop = running || starting
   let gatewayAction = "Start gateway"
   if (stopping) gatewayAction = "Stopping…"
   else if (canStop) gatewayAction = "Stop gateway"
+  if (external) gatewayAction = "Controlled in Terminal"
   const status = gatewayStatus(gateway)
-  const endpoint =
-    running ? gateway.url : `http://127.0.0.1:${snapshot.settings.port}/v1`
+  const endpoint = snapshot.connection?.apiUrl ?? "Gateway stopped"
+  const gatewayHost =
+    snapshot.connection ?
+      new URL(snapshot.connection.rootUrl).host
+    : "Not running"
+  const keyed = snapshot.connection?.authentication.kind === "keyed"
+  let requestPolicy = "Connect to a gateway to view its request policy."
+  if (snapshot.connection)
+    requestPolicy =
+      keyed ?
+        "Requests require your local gateway key."
+      : "Requests do not require a key."
   const recent = snapshot.activity.slice(0, 5)
 
   return (
@@ -85,7 +98,7 @@ export function OverviewView({
               variant={canStop ? "secondary" : "primary"}
               icon={canStop ? Square : Play}
               data-testid={canStop ? "stop-gateway" : "start-gateway"}
-              disabled={!signedIn || stopping}
+              disabled={!signedIn || stopping || external}
               busy={
                 canStop ?
                   pending.has("stop-gateway")
@@ -104,19 +117,27 @@ export function OverviewView({
           <div className="connection-node provider-node">
             <div className="node-icon provider-icon">
               <Github size={24} strokeWidth={1.6} aria-hidden="true" />
-              {signedIn && (
+              {connected && (
                 <span className="node-check">
                   <Check size={9} strokeWidth={3} />
                 </span>
               )}
             </div>
             <strong>GitHub Copilot</strong>
-            {signedIn ?
+            {account.kind === "signed-in" && (
               <>
                 <span className="node-detail">@{account.login}</span>
                 <Badge tone="success">Connected</Badge>
               </>
-            : <>
+            )}
+            {account.kind === "external-unverified" && (
+              <>
+                <span className="node-detail">Terminal account</span>
+                <Badge tone="success">Connected</Badge>
+              </>
+            )}
+            {!connected && (
+              <>
                 <span className="node-detail">No account connected</span>
                 <Button
                   variant="secondary"
@@ -130,10 +151,10 @@ export function OverviewView({
                   Sign in with GitHub
                 </Button>
               </>
-            }
+            )}
           </div>
           <div
-            className={`connection-line ${signedIn ? "is-connected" : ""}`}
+            className={`connection-line ${connected ? "is-connected" : ""}`}
             aria-hidden="true"
           >
             <span />
@@ -153,9 +174,7 @@ export function OverviewView({
               : <Network size={25} strokeWidth={1.6} aria-hidden="true" />}
             </div>
             <strong>Local gateway</strong>
-            <code className="node-detail">
-              127.0.0.1:{snapshot.settings.port}
-            </code>
+            <code className="node-detail">{gatewayHost}</code>
             <Badge tone={status.tone} dot>
               {status.label}
             </Badge>
@@ -188,13 +207,16 @@ export function OverviewView({
 
         <div className="endpoint-bar">
           <div className="endpoint-address">
-            <LockKeyhole size={15} aria-hidden="true" />
+            {keyed ?
+              <LockKeyhole size={15} aria-hidden="true" />
+            : <Network size={15} aria-hidden="true" />}
             <code title={endpoint}>{endpoint}</code>
           </div>
           <div className="endpoint-actions">
             <Button
               icon={Copy}
               variant="ghost"
+              disabled={!snapshot.connection}
               onClick={() => {
                 void run(
                   { kind: "copy", target: "base-url" },
@@ -208,7 +230,7 @@ export function OverviewView({
             <Button
               icon={KeyRound}
               variant="ghost"
-              disabled={!signedIn}
+              disabled={!keyed}
               onClick={() => {
                 void run(
                   { kind: "copy", target: "gateway-key" },
@@ -216,7 +238,7 @@ export function OverviewView({
                 )
               }}
             >
-              Copy key
+              {snapshot.connection && !keyed ? "No key required" : "Copy key"}
             </Button>
           </div>
         </div>
@@ -249,35 +271,7 @@ export function OverviewView({
         />
       )}
 
-      <section
-        className="session-metrics"
-        aria-label="Current session statistics"
-      >
-        <div>
-          <span>Requests</span>
-          <strong>{formatNumber(snapshot.totals.requests)}</strong>
-          <small>This session</small>
-        </div>
-        <div>
-          <span>Input tokens</span>
-          <strong>{formatNumber(snapshot.totals.inputTokens)}</strong>
-          <small>{formatNumber(snapshot.totals.cachedTokens)} cached</small>
-        </div>
-        <div>
-          <span>Output tokens</span>
-          <strong>{formatNumber(snapshot.totals.outputTokens)}</strong>
-          <small>This session</small>
-        </div>
-        <div>
-          <span>Errors</span>
-          <strong
-            className={snapshot.totals.errors > 0 ? "error-number" : undefined}
-          >
-            {formatNumber(snapshot.totals.errors)}
-          </strong>
-          <small>This session</small>
-        </div>
-      </section>
+      <SessionMetrics snapshot={snapshot} />
 
       <div className="overview-lower">
         <section className="panel recent-panel">
@@ -318,10 +312,10 @@ export function OverviewView({
         <UsagePanel snapshot={snapshot} run={run} pending={pending} />
       </div>
       <div className="overview-footer">
-        <LockKeyhole size={12} aria-hidden="true" />
-        <span>
-          Gateway binds to your computer only. Requests require your local key.
-        </span>
+        {keyed ?
+          <LockKeyhole size={12} aria-hidden="true" />
+        : <Network size={12} aria-hidden="true" />}
+        <span>{requestPolicy}</span>
       </div>
     </div>
   )
@@ -333,7 +327,8 @@ function UsagePanel({ snapshot, run, pending }: ViewProps) {
     usage?.quotas.find(
       (entry) => /premium/i.test(entry.id) || /premium/i.test(entry.label),
     ) ?? usage?.quotas[0]
-  const signedIn = snapshot.account.kind === "signed-in"
+  const canRefresh =
+    snapshot.account.kind === "signed-in" || snapshot.connection !== null
 
   return (
     <section className="panel usage-panel">
@@ -344,7 +339,7 @@ function UsagePanel({ snapshot, run, pending }: ViewProps) {
           className="icon-button"
           icon={RefreshCw}
           aria-label="Refresh usage"
-          disabled={!signedIn}
+          disabled={!canRefresh}
           busy={pending.has("refresh")}
           onClick={() => {
             void run({ kind: "refresh" })
@@ -356,7 +351,7 @@ function UsagePanel({ snapshot, run, pending }: ViewProps) {
           <>
             <strong className="usage-unavailable">Unavailable</strong>
             <p>
-              {signedIn ?
+              {canRefresh ?
                 "Refresh to check your Copilot allowance."
               : "Sign in to see your Copilot allowance."}
             </p>
@@ -394,8 +389,8 @@ function UsagePanel({ snapshot, run, pending }: ViewProps) {
           </>
         )}
         {usage && (
-          <div className="usage-fetched">
-            Updated {formatTime(usage.fetchedAt)}
+          <div className="usage-fetched" title={usage.fetchedAt}>
+            Checked {formatDateTime(usage.fetchedAt)}
           </div>
         )}
       </div>
@@ -423,7 +418,7 @@ function TestRequestPanel({
   const running = snapshot.probe.kind === "running" || pending.has("run-probe")
   const enabled =
     snapshot.gateway.kind === "running"
-    && snapshot.account.kind === "signed-in"
+    && snapshot.connection !== null
     && Boolean(selectedModel)
     && Boolean(prompt.trim())
     && prompt.length <= 4000
@@ -525,6 +520,57 @@ function TestRequestPanel({
           <p>{snapshot.probe.message}</p>
         </div>
       )}
+    </section>
+  )
+}
+
+function SessionMetrics({ snapshot }: Pick<ViewProps, "snapshot">) {
+  const external = snapshot.source.kind === "legacy-cli"
+  return (
+    <section
+      className="session-metrics"
+      aria-label="Current session statistics"
+    >
+      <div>
+        <span>{external ? "Recent requests" : "Requests"}</span>
+        <strong>
+          {formatNumber(
+            external ? snapshot.activity.length : snapshot.totals.requests,
+          )}
+        </strong>
+        <small>{external ? "From Terminal" : "This session"}</small>
+      </div>
+      <div>
+        <span>Input tokens</span>
+        <strong>{formatNumber(snapshot.totals.inputTokens)}</strong>
+        <small>
+          {snapshot.totals.cachedTokens === null ?
+            "Not reported"
+          : `${formatNumber(snapshot.totals.cachedTokens)} cached`}
+        </small>
+      </div>
+      <div>
+        <span>Output tokens</span>
+        <strong>{formatNumber(snapshot.totals.outputTokens)}</strong>
+        <small>
+          {snapshot.totals.outputTokens === null ?
+            "Not reported"
+          : "This session"}
+        </small>
+      </div>
+      <div>
+        <span>Errors</span>
+        <strong
+          className={
+            (snapshot.totals.errors ?? 0) > 0 ? "error-number" : undefined
+          }
+        >
+          {formatNumber(snapshot.totals.errors)}
+        </strong>
+        <small>
+          {snapshot.totals.errors === null ? "Not reported" : "This session"}
+        </small>
+      </div>
     </section>
   )
 }

@@ -42,6 +42,7 @@ const child = spawn(executable, args, {
   env: environment,
   stdio: ["ignore", "pipe", "pipe"],
 })
+const startedAt = Date.now()
 const log = await fs.open(path.join(output, "electron.log"), "w")
 child.stdout.on("data", (chunk) => {
   void log.write(chunk)
@@ -55,12 +56,27 @@ const timer = setTimeout(() => {
   child.kill("SIGKILL")
 }, 120_000)
 try {
-  const code = await new Promise<number | null>((resolve, reject) => {
+  const status = await new Promise<{
+    code: number | null
+    signal: NodeJS.Signals | null
+  }>((resolve, reject) => {
     child.once("error", reject)
-    child.once("exit", resolve)
+    child.once("exit", (code, signal) => resolve({ code, signal }))
   })
+  await fs.writeFile(
+    path.join(output, "process-status.json"),
+    JSON.stringify(
+      { ...status, timedOut, elapsedMs: Date.now() - startedAt },
+      null,
+      2,
+    ) + "\n",
+  )
   assert(!timedOut, "Native smoke exceeded 120 seconds")
-  assert.equal(code, 0, `Electron exited with ${code}`)
+  assert.equal(
+    status.code,
+    0,
+    `Electron exited with code ${status.code} and signal ${status.signal}`,
+  )
   const report = parseReport(
     await fs.readFile(path.join(output, "smoke.json"), "utf8"),
   )

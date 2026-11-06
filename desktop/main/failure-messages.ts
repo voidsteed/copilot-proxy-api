@@ -9,6 +9,8 @@ const gatewayMessages: Record<ProxyProcessError["kind"], string> = {
   upstream: "Copilot is unavailable. Check your connection and try again.",
   startup: "The gateway could not start. Try again.",
   stopped: "The gateway stopped.",
+  "drain-timeout":
+    "The gateway is still serving an agent request. Its running configuration was preserved.",
 }
 
 const deviceMessages: Record<DeviceFlowError["kind"], string> = {
