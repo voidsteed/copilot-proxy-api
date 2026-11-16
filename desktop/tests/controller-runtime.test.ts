@@ -37,6 +37,13 @@ import { createController } from "../main/controller"
 import { startProxyProcess } from "../main/proxy-process"
 import { snapshotSchema } from "../shared/contracts"
 import { startFixtureUpstream } from "../testing/upstream"
+import { closeStreamingClient } from "./fixtures/cancellation-client"
+import {
+  availablePort,
+  cancellationDiagnostics,
+  eventually,
+  expectRejection,
+} from "./fixtures/runtime"
 const root = fileURLToPath(new URL("../../", import.meta.url))
 const cleanups: Array<() => Promise<void>> = []
 let directory = ""
@@ -68,34 +75,6 @@ afterEach(async () => {
 afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true })
 })
-async function eventually(
-  predicate: () => boolean,
-  timeout = 8000,
-): Promise<void> {
-  const until = Date.now() + timeout
-  while (Date.now() < until) {
-    if (predicate()) return
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-  expect(predicate()).toBe(true)
-}
-async function expectRejection(task: Promise<unknown>): Promise<void> {
-  let rejected = false
-  try {
-    await task
-  } catch {
-    rejected = true
-  }
-  expect(rejected).toBe(true)
-}
-async function availablePort(): Promise<number> {
-  const server = createServer()
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
-  const address = server.address()
-  if (!address || typeof address === "string") throw new Error("No test port")
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  return address.port
-}
 async function fixture() {
   const upstream = await startFixtureUpstream()
   cleanups.push(() => upstream.close())
@@ -105,6 +84,7 @@ async function proxy() {
   const upstream = await fixture()
   const port = await availablePort()
   const activity: Array<ActivityRecord> = []
+  const exits: Array<boolean> = []
   const process = startProxyProcess({
     runtimePath,
     runtimeExecPath: "node",
@@ -117,7 +97,7 @@ async function proxy() {
       fixtureOrigin: upstream.origin,
     },
     onActivity: (record) => activity.push(record),
-    onExit: () => undefined,
+    onExit: (expected) => exits.push(expected),
   })
   cleanups.push(() => process.stop())
   await process.ready
@@ -126,7 +106,7 @@ async function proxy() {
     authorization: `Bearer ${gatewayKey}`,
     "content-type": "application/json",
   }
-  return { upstream, port, activity, process, origin, headers }
+  return { upstream, port, activity, exits, process, origin, headers }
 }
 async function rawStatus(
   origin: string,
@@ -385,7 +365,11 @@ describe("desktop streaming and parent shutdown", () => {
     expect((await reader?.read())?.done).toBe(false)
     abort.abort()
     await reader?.cancel().catch(() => undefined)
-    await eventually(() => runtime.activity.length === 3)
+    await eventually(
+      () => runtime.activity.length === 3,
+      8000,
+      () => cancellationDiagnostics(runtime),
+    )
     expect(runtime.activity[2]?.outcome).toBe("cancelled")
     expect(JSON.stringify(runtime.activity)).not.toContain("fixture_failure")
     const interrupted = await post({
@@ -801,4 +785,17 @@ test("native Google generation activity retains exact inference paths once witho
   ).toBe(true)
   for (const secret of [gatewayKey, "query-private", "x-goog-api-key"])
     expect(JSON.stringify(runtime.activity)).not.toContain(secret)
+}, 15000)
+
+test("node:http destruction cancels the real Responses connection", async () => {
+  const runtime = await proxy()
+  const closed = await closeStreamingClient({
+    origin: `${runtime.origin}/v1/responses`,
+    headers: runtime.headers,
+    registerCleanup: (cleanup) => cleanups.push(cleanup),
+  })
+  expect(closed.bytes).toBeGreaterThan(0)
+  expect(closed.destroyed).toBe(true)
+  await eventually(() => runtime.activity.length === 1)
+  expect(runtime.activity[0]?.outcome).toBe("cancelled")
 }, 15000)
