@@ -14,6 +14,7 @@ import type {
 } from "./proxy-contracts"
 
 import { configuredProxyConnections } from "./agent-config"
+import { isInferencePath } from "./inference-path"
 import { nativeConnectionSchema, runtimeOptionsSchema } from "./proxy-contracts"
 
 const MAX_BODY_BYTES = 4_000_000
@@ -92,17 +93,6 @@ const traceListSchema = z.object({
   object: z.literal("list"),
   data: z.array(traceSchema).max(2000),
 })
-const inferencePaths = new Set([
-  "/chat/completions",
-  "/v1/chat/completions",
-  "/responses",
-  "/v1/responses",
-  "/messages",
-  "/v1/messages",
-  "/embeddings",
-  "/v1/embeddings",
-])
-
 async function boundedBody(response: Response): Promise<string> {
   if (
     !response.ok
@@ -225,9 +215,7 @@ function observedActivity(
   traces: z.infer<typeof traceListSchema>,
 ): Array<ObservedActivity> {
   return traces.data
-    .filter(
-      (trace) => trace.method === "POST" && inferencePaths.has(trace.path),
-    )
+    .filter((trace) => trace.method === "POST" && isInferencePath(trace.path))
     .map((trace) => ({
       ...trace,
       outcome: "observed",

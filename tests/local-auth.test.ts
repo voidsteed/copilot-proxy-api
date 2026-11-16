@@ -102,3 +102,60 @@ describe("optionalLocalAuth", () => {
     expect(response.status).not.toBe(401)
   })
 })
+
+describe("Google header local authentication", () => {
+  test("accepts only configured Google header keys and never a query key", async () => {
+    state.localApiKeys = ["secret"]
+    const app = createProtectedApp()
+    expect(
+      (
+        await app.request("/protected", {
+          headers: { "x-goog-api-key": "secret" },
+        })
+      ).status,
+    ).toBe(200)
+    expect(
+      (
+        await app.request("/protected", {
+          headers: { "x-goog-api-key": "wrong" },
+        })
+      ).status,
+    ).toBe(401)
+    expect((await app.request("/protected?key=secret")).status).toBe(401)
+  })
+
+  test("preserves existing matching-header policy for conflicting credentials", async () => {
+    state.localApiKeys = ["secret"]
+    const app = createProtectedApp()
+    const credentialSets: Array<Record<string, string>> = [
+      { authorization: "Bearer secret", "x-goog-api-key": "wrong" },
+      { "x-api-key": "secret", "x-goog-api-key": "wrong" },
+      { authorization: "Bearer wrong", "x-goog-api-key": "secret" },
+    ]
+    for (const headers of credentialSets) {
+      expect((await app.request("/protected", { headers })).status).toBe(200)
+    }
+  })
+
+  test("Google models auth errors use Google structure without exposing credentials", async () => {
+    state.localApiKeys = ["secret"]
+    const app = new Hono()
+    app.use(optionalLocalAuth)
+    app.post("/v1beta/models/:action", (c) => c.json({ ok: true }))
+    const response = await app.request(
+      "/v1beta/models/gemini:generateContent?key=secret",
+      {
+        method: "POST",
+        headers: { "x-goog-api-key": "wrong" },
+      },
+    )
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({
+      error: {
+        code: 401,
+        status: "UNAUTHENTICATED",
+        message: "Missing or invalid API key",
+      },
+    })
+  })
+})

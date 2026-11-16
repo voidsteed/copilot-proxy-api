@@ -3,6 +3,7 @@ import type { Context, MiddlewareHandler } from "hono"
 import consola from "consola"
 import { colors } from "consola/utils"
 
+import { isGeminiInferencePath } from "./inference-path"
 import { state } from "./state"
 
 const MAX_JSON_BODY_CHARS = 2_000_000
@@ -183,10 +184,14 @@ function observeEventStream(
 ): Response {
   const { c, requestState, response, body, contentType, writeLog, onComplete } =
     options
+  let completionProtocol: "responses" | "gemini" | undefined
+  if (c.req.path === "/v1/responses" || c.req.path === "/responses")
+    completionProtocol = "responses"
+  else if (isGeminiInferencePath(c.req.path)) completionProtocol = "gemini"
   const observer = new ResponseMetricsObserver(
     requestState,
     contentType,
-    c.req.path === "/v1/responses" || c.req.path === "/responses",
+    completionProtocol,
   )
   const reader = body.getReader()
   const observedBody = new ReadableStream<Uint8Array>({
@@ -312,7 +317,7 @@ class ResponseMetricsObserver {
   private readonly decoder = new TextDecoder()
   private readonly isEventStream: boolean
   private readonly requestState: RequestLogState
-  private readonly trackResponsesCompletion: boolean
+  private readonly completionProtocol?: "responses" | "gemini"
   private hasTerminalResponseEvent = false
   private jsonBody = ""
   private sseBuffer = ""
@@ -321,11 +326,11 @@ class ResponseMetricsObserver {
   constructor(
     requestState: RequestLogState,
     contentType: string,
-    trackResponsesCompletion = false,
+    completionProtocol?: "responses" | "gemini",
   ) {
     this.requestState = requestState
     this.isEventStream = contentType.includes("text/event-stream")
-    this.trackResponsesCompletion = trackResponsesCompletion
+    this.completionProtocol = completionProtocol
   }
 
   push(chunk: Uint8Array): void {
@@ -359,12 +364,14 @@ class ResponseMetricsObserver {
       this.pushSSEText(finalText + "\n")
       if (
         streamClosed
-        && this.trackResponsesCompletion
+        && this.completionProtocol
         && !this.hasTerminalResponseEvent
         && !this.requestState.error
       ) {
         this.requestState.error =
-          "Responses stream closed before a terminal event"
+          this.completionProtocol === "gemini" ?
+            "Gemini stream closed before a terminal event"
+          : "Responses stream closed before a terminal event"
       }
       return
     }
@@ -415,10 +422,12 @@ class ResponseMetricsObserver {
     try {
       const event = JSON.parse(data) as unknown
       mergeResponseMetrics(this.requestState, event)
+      if (this.completionProtocol === "gemini" && isGeminiTerminalEvent(event))
+        this.hasTerminalResponseEvent = true
       if (isRecord(event) && event.error)
         this.requestState.error = "Response stream failed"
       if (
-        this.trackResponsesCompletion
+        this.completionProtocol === "responses"
         || (isRecord(event) && event.type === "error")
       )
         this.observeResponseEvent(event)
@@ -459,6 +468,22 @@ class ResponseMetricsObserver {
   }
 }
 
+function isGeminiTerminalEvent(event: unknown): boolean {
+  if (!isRecord(event)) return false
+  if (
+    isRecord(event.promptFeedback)
+    && typeof event.promptFeedback.blockReason === "string"
+  )
+    return true
+  return (
+    Array.isArray(event.candidates)
+    && event.candidates.some(
+      (candidate: unknown) =>
+        isRecord(candidate) && typeof candidate.finishReason === "string",
+    )
+  )
+}
+
 function mergeResponseMetrics(
   requestState: RequestLogState,
   value: unknown,
@@ -470,9 +495,23 @@ function mergeResponseMetrics(
     isRecord(value.response) ? value.response : undefined,
     isRecord(value.message) ? value.message : undefined,
   ]) {
-    if (!container || !isRecord(container.usage)) continue
-    mergeUsage(requestState, container.usage)
+    if (!container) continue
+    if (isRecord(container.usage)) mergeUsage(requestState, container.usage)
+    if (isRecord(container.usageMetadata))
+      mergeGeminiUsage(requestState, container.usageMetadata)
   }
+}
+
+function mergeGeminiUsage(
+  requestState: RequestLogState,
+  usage: Record<string, unknown>,
+): void {
+  const input = numberValue(usage.promptTokenCount)
+  const output = numberValue(usage.candidatesTokenCount)
+  const cached = numberValue(usage.cachedContentTokenCount)
+  if (input !== undefined) requestState.inputTokens = input
+  if (output !== undefined) requestState.outputTokens = output
+  if (cached !== undefined) requestState.cachedTokens = cached
 }
 
 function mergeUsage(

@@ -186,7 +186,7 @@ export async function verifyPackage(options: {
       await compareFile({
         source: path.join(dist, filename),
         packaged: () =>
-          Promise.resolve(extractFile(archive, `dist/${filename}`)),
+          Promise.resolve(extractFile(archive, path.join("dist", filename))),
         filename: `dist/${filename}`,
         files: report.files,
         issues: report.issues,
@@ -196,7 +196,7 @@ export async function verifyPackage(options: {
       const filename = entry.replaceAll("\\", "/").replace(/^\//, "")
       if (
         filename.startsWith("dist/renderer/")
-        && !("files" in statFile(archive, filename, false))
+        && !("files" in statFile(archive, path.normalize(filename), false))
         && !filenames.includes(filename.slice("dist/".length))
       )
         report.issues.push(

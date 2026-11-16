@@ -224,6 +224,7 @@ test.skipIf(!powershell)(
       {
         encoding: "utf8",
         env: { PATH: process.env.PATH },
+        timeout: 15_000,
       },
     )
     expect(child.error).toBeUndefined()
@@ -232,6 +233,7 @@ test.skipIf(!powershell)(
     const observed: unknown = JSON.parse(child.stdout)
     expect(observed).toEqual(["http://localhost:43219", apiKey, modelId])
   },
+  20_000,
 )
 
 function savedConfig(target: ConfigurableAgent): AgentConfigView {

@@ -27,6 +27,7 @@ import {
   nativeSnapshotSchema,
   runtimeOptionsSchema,
 } from "../../src/lib/proxy-contracts"
+import { nativeControlCapability } from "../../src/lib/proxy-session"
 import { hostProxySession, openProxySession } from "../../src/lib/proxy-session"
 import { monitorProxySession } from "../../src/start"
 import { createController } from "../main/controller"
@@ -40,6 +41,7 @@ const token = "fixture_github_token"
 const key = "fixture_owned_key_012345678901234567890123456789"
 const customKey = "fixture_custom_native_key_0123456789"
 const cleanups: Array<() => Promise<void>> = []
+const it = test.skipIf(nativeControlCapability().kind !== "supported")
 let directory = ""
 let runtimePath = ""
 beforeAll(async () => {
@@ -257,12 +259,12 @@ async function simultaneous(options: {
   await creating
   expect(nativeSnapshot(context.controller).gateway.kind).toBe("stopped")
 }
-test(
+it(
   "simultaneous private saved-account clients grant one creator and an observer cannot stop it",
   () => simultaneous({ credential: { kind: "native-saved-account" } }),
   15_000,
 )
-test(
+it(
   "provided-token startup returns its creation receipt and later native observers cannot stop it",
   () =>
     simultaneous({
@@ -275,7 +277,7 @@ test(
     }),
   15_000,
 )
-test(
+it(
   "simultaneous private runtime replacements grant one creator for the replacement",
   () =>
     simultaneous({

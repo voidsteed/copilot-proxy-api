@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 
 import type {
   NativeIntent,
@@ -20,6 +21,7 @@ import {
 } from "~/lib/proxy-contracts"
 import {
   hostProxySession,
+  nativeControlCapability,
   writeNativeCredentialProvenance,
 } from "~/lib/proxy-session"
 import {
@@ -29,6 +31,9 @@ import {
   type RunServerOptions,
 } from "~/start"
 import { runStop } from "~/stop"
+
+const privateControl = nativeControlCapability()
+const it = test.skipIf(privateControl.kind !== "supported")
 
 let directory: string
 let release: (() => Promise<void>) | undefined
@@ -75,7 +80,7 @@ function roots() {
   return { homeDirectory: directory, stateDirectory: join(directory, "native") }
 }
 
-async function owner() {
+async function owner(platform?: NodeJS.Platform) {
   let snapshot = nativeSnapshotSchema.parse({
     kind: "managed",
     sessionId: "cli-shared-owner",
@@ -188,11 +193,10 @@ async function owner() {
       return { kind: "applied", snapshot, createdGateway: null }
     },
   }
-  const dispose = await hostProxySession({
-    ...roots(),
-    authority: api,
-    showUi: () => {},
-  })
+  const dispose = await hostProxySession(
+    { ...roots(), authority: api, showUi: () => {} },
+    { platform },
+  )
   release = dispose
   return { commands, snapshot: () => snapshot }
 }
@@ -205,7 +209,44 @@ async function waitFor(predicate: () => boolean) {
 }
 
 describe("CLI shares the native authority", () => {
-  test("default Start attaches without resetting enterprise options, then recognizes Stop from another client", async () => {
+  test("Start help exposes the explicit standalone mode", () => {
+    const child = Bun.spawnSync([
+      process.execPath,
+      fileURLToPath(new URL("../src/main.ts", import.meta.url)),
+      "start",
+      "--help",
+    ])
+    expect(child.exitCode).toBe(0)
+    expect(child.stdout.toString()).toContain("--standalone")
+  })
+
+  test("explicit standalone rejects a private profile before contacting its native owner", async () => {
+    const shared = await owner()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 100)
+    try {
+      await runStart({
+        ...roots(),
+        values: { ...values, standalone: true },
+        explicit: {},
+        signal: controller.signal,
+      }).then(
+        () => {
+          throw new Error("Expected standalone profile rejection")
+        },
+        (error: unknown) => {
+          expect(error instanceof Error && error.message).toContain(
+            "Standalone CLI authentication uses the standard user home.",
+          )
+        },
+      )
+      expect(shared.commands).toEqual([])
+    } finally {
+      clearTimeout(timer)
+    }
+  })
+
+  it("default Start attaches without resetting enterprise options, then recognizes Stop from another client", async () => {
     const shared = await owner()
     const pending = runStart({
       ...roots(),
@@ -248,7 +289,7 @@ describe("CLI shares the native authority", () => {
     ).toHaveLength(1)
   })
 
-  test("Auth, quota and Debug use the native account while preserving old plaintext credentials", async () => {
+  it("Auth, quota and Debug use the native account while preserving old plaintext credentials", async () => {
     const shared = await owner()
     const oldPath = join(
       directory,
@@ -298,7 +339,9 @@ describe("CLI shares the native authority", () => {
       },
       (error: unknown) => {
         expect(error instanceof Error && error.message).toContain(
-          "native Copilot Proxy storage",
+          privateControl.kind === "unsupported" ?
+            privateControl.message
+          : "native Copilot Proxy storage",
         )
       },
     )
@@ -308,7 +351,9 @@ describe("CLI shares the native authority", () => {
       },
       (error: unknown) => {
         expect(error instanceof Error && error.message).toContain(
-          "native Copilot Proxy storage",
+          privateControl.kind === "unsupported" ?
+            privateControl.message
+          : "native Copilot Proxy storage",
         )
       },
     )
@@ -350,6 +395,9 @@ describe("CLI shares the native authority", () => {
     expect(explicitCliRuntime({ values, rawArgs: ["--api-key", ""] })).toEqual({
       authentication: { kind: "none" },
     })
+    expect(explicitCliRuntime({ values, rawArgs: ["--standalone"] })).toEqual(
+      {},
+    )
     expect(
       explicitCliRuntime({
         values: { ...values, verbose: true, rateLimitWait: true },
@@ -364,6 +412,31 @@ describe("CLI shares the native authority", () => {
     ).toEqual({})
   })
 })
+
+test.each(["win32", "linux"] as const)(
+  "%s unavailable marker rejects Start and Auth without using preserved standalone credentials",
+  async (platform) => {
+    const capability = nativeControlCapability({ platform })
+    if (capability.kind !== "unsupported")
+      throw new Error("Expected unsupported host")
+    const shared = await owner(platform)
+    const oldDirectory = join(directory, ".local", "share", "copilot-proxy-api")
+    const oldPath = join(oldDirectory, "github_token")
+    await mkdir(oldDirectory, { recursive: true })
+    await writeFile(oldPath, "fixture-old-account-token")
+    const results = await Promise.allSettled([
+      runStart({ ...roots(), values, explicit: {} }),
+      runAuth({ ...roots(), verbose: false, showToken: false }),
+    ])
+    for (const result of results)
+      expect(result).toMatchObject({
+        status: "rejected",
+        reason: { message: capability.message },
+      })
+    expect(shared.commands).toEqual([])
+    expect(await readFile(oldPath, "utf8")).toBe("fixture-old-account-token")
+  },
+)
 
 describe("Claude instructions reflect saved config and actual auth", () => {
   test("a ready existing config uses its exact alias and keeps the small model independently configured", async () => {
@@ -407,16 +480,35 @@ describe("Claude instructions reflect saved config and actual auth", () => {
     })
     const filename = join(directory, ".claude", "settings.json")
     await writeFile(filename, text)
-    const command = await claudeCodeCommand({
+    const generated = await claudeCodeCommand({
       homeDirectory: directory,
       connection,
       catalog: [model],
     })
-    expect(command).toContain("ANTHROPIC_BASE_URL='http://localhost:48923/'")
-    expect(command).toContain(
-      String.raw`ANTHROPIC_AUTH_TOKEN='fixture-real-key'\''with$metacharacters'`,
-    )
-    expect(command).toContain("ANTHROPIC_MODEL='claude-sonnet-5.5[1m]'")
+    const command =
+      generated.startsWith("powershell.exe -NoProfile -EncodedCommand ") ?
+        Buffer.from(generated.split(" ").at(-1) ?? "", "base64").toString(
+          "utf16le",
+        )
+      : generated
+    if (process.platform === "win32") {
+      expect(command).toContain(
+        "$env:ANTHROPIC_BASE_URL = 'http://localhost:48923/'",
+      )
+      expect(command).toContain(
+        "$env:ANTHROPIC_AUTH_TOKEN = 'fixture-real-key''with$metacharacters'",
+      )
+      expect(command).toContain(
+        "$env:ANTHROPIC_MODEL = 'claude-sonnet-5.5[1m]'",
+      )
+      expect(command.endsWith("; claude")).toBe(true)
+    } else {
+      expect(command).toContain("ANTHROPIC_BASE_URL='http://localhost:48923/'")
+      expect(command).toContain(
+        String.raw`ANTHROPIC_AUTH_TOKEN='fixture-real-key'\''with$metacharacters'`,
+      )
+      expect(command).toContain("ANTHROPIC_MODEL='claude-sonnet-5.5[1m]'")
+    }
     expect(command).not.toContain("ANTHROPIC_SMALL_FAST_MODEL")
     expect(command).not.toContain("dummy")
     expect(await readFile(filename, "utf8")).toBe(text)
@@ -427,14 +519,24 @@ describe("Claude instructions reflect saved config and actual auth", () => {
       ...connection,
       authentication: { kind: "none" },
     })
-    const command = await claudeCodeCommand({
+    const generated = await claudeCodeCommand({
       homeDirectory: directory,
       connection: unkeyed,
       catalog: [model],
       selectModel: () => Promise.resolve(model.id),
     })
+    const command =
+      generated.startsWith("powershell.exe -NoProfile -EncodedCommand ") ?
+        Buffer.from(generated.split(" ").at(-1) ?? "", "base64").toString(
+          "utf16le",
+        )
+      : generated
     expect(command).not.toContain("ANTHROPIC_AUTH_TOKEN")
     expect(command).not.toContain("dummy")
-    expect(command).toContain("ANTHROPIC_MODEL='claude-sonnet-5.5'")
+    expect(command).toContain(
+      process.platform === "win32" ?
+        "$env:ANTHROPIC_MODEL = 'claude-sonnet-5.5'"
+      : "ANTHROPIC_MODEL='claude-sonnet-5.5'",
+    )
   })
 })

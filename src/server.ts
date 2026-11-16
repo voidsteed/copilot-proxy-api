@@ -7,6 +7,7 @@ import { requestTraceMiddleware } from "./lib/request-trace"
 import { completionRoutes } from "./routes/chat-completions/route"
 import { debugRoutes } from "./routes/debug/route"
 import { embeddingRoutes } from "./routes/embeddings/route"
+import { geminiRoutes } from "./routes/gemini/route"
 import { messageRoutes } from "./routes/messages/route"
 import { modelRoutes } from "./routes/models/route"
 import { responsesRoutes } from "./routes/responses/route"
@@ -40,3 +41,5 @@ server.route("/v1/responses", responsesRoutes)
 
 // Anthropic compatible endpoints
 server.route("/v1/messages", messageRoutes)
+
+server.route("/v1beta/models", geminiRoutes)

@@ -51,6 +51,7 @@ const runServerOptionsSchema = z.object({
   proxyEnv: z.boolean(),
   apiKey: z.string().max(64_000).optional(),
   responsesContextTrim: z.boolean(),
+  standalone: z.boolean().optional(),
 })
 export type RunServerOptions = z.infer<typeof runServerOptionsSchema>
 
@@ -303,6 +304,10 @@ export async function runStart(options: {
 }): Promise<void> {
   const values = runServerOptionsSchema.parse(options.values)
   const context = await cliProxyOptions(options)
+  if (values.standalone) {
+    requireDefaultStandaloneProfile(context.homeDirectory)
+    return runServer(values)
+  }
   const session = await openProxySession({
     ...context,
     intent: {
@@ -465,6 +470,12 @@ export const start = defineCommand({
     description: "Start or attach to the shared Copilot Proxy",
   },
   args: {
+    standalone: {
+      type: "boolean",
+      default: false,
+      description:
+        "Start a separate API server without attaching to the desktop proxy",
+    },
     port: {
       alias: "p",
       type: "string",
@@ -540,6 +551,7 @@ export const start = defineCommand({
       rateLimitRaw === undefined ? undefined : Number(rateLimitRaw)
 
     const values = runServerOptionsSchema.parse({
+      standalone: args.standalone,
       port: Number(args.port),
       verbose: args.verbose,
       accountType: args["account-type"],

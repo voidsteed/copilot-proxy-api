@@ -18,13 +18,31 @@ export const optionalLocalAuth: MiddlewareHandler = async (c, next) => {
 
   const bearerToken = extractBearerToken(c.req.header("authorization"))
   const apiKey = c.req.header("x-api-key")?.trim()
+  const googleKey = c.req.header("x-goog-api-key")?.trim()
 
   if (
     (bearerToken && state.localApiKeys.includes(bearerToken))
     || (apiKey && state.localApiKeys.includes(apiKey))
+    || (googleKey && state.localApiKeys.includes(googleKey))
   ) {
     await next()
     return
+  }
+
+  if (
+    c.req.path === "/v1beta/models"
+    || c.req.path.startsWith("/v1beta/models/")
+  ) {
+    return c.json(
+      {
+        error: {
+          code: 401,
+          status: "UNAUTHENTICATED",
+          message: "Missing or invalid API key",
+        },
+      },
+      401,
+    )
   }
 
   return c.json(
