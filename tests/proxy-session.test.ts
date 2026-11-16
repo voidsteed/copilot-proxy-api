@@ -672,7 +672,7 @@ describe("native control platform support", () => {
         ),
       ),
     ).toEqual({ kind: "native-authority", account: "signed-out" })
-    expect(await readdir(stateDirectory)).toEqual([
+    expect((await readdir(stateDirectory)).sort()).toEqual([
       "credential-provenance.json",
       "native-control-unavailable.json",
     ])

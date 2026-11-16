@@ -70,6 +70,10 @@ async function artifact(stale: boolean) {
       path.join(packed, "dist", "renderer", "old.js"),
       "stale renderer\n",
     )
+    await fs.writeFile(
+      path.join(packed, "dist", "renderer", "assets", "old.js"),
+      "stale nested renderer\n",
+    )
   } else {
     const engine = path.join(
       resources,
@@ -93,7 +97,13 @@ test("the packaged runtime and renderer match the fresh build", async () => {
   const report = await artifact(false)
   expect(report.passed).toBe(true)
   expect(report.issues).toEqual([])
-  expect(report.files).toHaveLength(5)
+  expect(report.files.map((file) => file.path).sort()).toEqual([
+    "app.asar.unpacked/dist/engine.cjs",
+    "dist/main.cjs",
+    "dist/preload.cjs",
+    "dist/renderer/assets/app.js",
+    "dist/renderer/index.html",
+  ])
   for (const file of report.files)
     expect(file.packagedSha256).toBe(file.sourceSha256)
 })
@@ -109,6 +119,9 @@ test("a stale package fails when its header, renderer, metadata, or unpacked eng
   )
   expect(report.issues).toContain(
     "Packaged renderer contains a stale file: dist/renderer/old.js",
+  )
+  expect(report.issues).toContain(
+    "Packaged renderer contains a stale file: dist/renderer/assets/old.js",
   )
   expect(report.issues).toContain(
     "Packaged file is missing or unreadable: app.asar.unpacked/dist/engine.cjs",
