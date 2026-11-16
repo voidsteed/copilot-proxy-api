@@ -41,6 +41,9 @@ import {
   writeNativeCredentialProvenance,
 } from "~/lib/proxy-session"
 
+const privateControl = nativeControlCapability()
+const it = test.skipIf(privateControl.kind !== "supported")
+
 let directory: string
 const disposals: Array<() => Promise<void>> = []
 beforeEach(async () => {
@@ -235,7 +238,7 @@ async function until(predicate: () => boolean) {
 }
 
 describe("native private sessions", () => {
-  test("two callers share one owner, actual private connection and independent creator/observer lifetimes", async () => {
+  it("two callers share one owner, actual private connection and independent creator/observer lifetimes", async () => {
     const owner = await hosted()
     const first = await openProxySession(options())
     const second = await openProxySession(options())
@@ -282,7 +285,7 @@ describe("native private sessions", () => {
     await first.release()
   })
 
-  test("release never applies stop, while a matching creator lease can stop only its own generation", async () => {
+  it("release never applies stop, while a matching creator lease can stop only its own generation", async () => {
     const owner = await hosted()
     const creator = await openProxySession(options({ manualApprove: true }))
     if (creator.kind !== "managed" || creator.lifecycle.kind !== "creator")
@@ -302,7 +305,7 @@ describe("native private sessions", () => {
     ).toHaveLength(1)
   })
 
-  test("rejects wrong nonces, unknown commands and oversized input before dispatch", async () => {
+  it("rejects wrong nonces, unknown commands and oversized input before dispatch", async () => {
     const owner = await hosted()
     const live = await record()
     for (const mutation of [
@@ -356,7 +359,7 @@ describe("native private sessions", () => {
     )
   })
 
-  test("rejects unsafe state/enrollment and changed package bytes without launching arbitrary executables", async () => {
+  test("rejects unverified enrollment without launching arbitrary executables", async () => {
     await mkdir(options().stateDirectory, { recursive: true, mode: 0o700 })
     await writeFile(
       join(options().stateDirectory, "installation.json"),
@@ -369,6 +372,10 @@ describe("native private sessions", () => {
       { mode: 0o600 },
     )
     expect((await observeProxySession(options())).kind).toBe("unavailable")
+  })
+
+  it("rejects changed macOS package bytes and unsafe POSIX state permissions", async () => {
+    await mkdir(options().stateDirectory, { recursive: true, mode: 0o700 })
     const app = join(directory, "Copilot Proxy.app", "Contents")
     const executable = join(app, "MacOS", "Copilot Proxy")
     await mkdir(dirname(executable), { recursive: true })
@@ -404,7 +411,7 @@ describe("native private sessions", () => {
     await chmod(options().stateDirectory, 0o700)
   })
 
-  test("a long state root uses a verified short alias whose socket stays in the injected root", async () => {
+  it("a long state root uses a verified short alias whose socket stays in the injected root", async () => {
     const owner = await hosted()
     const live = await record()
     expect(Buffer.byteLength(live.socketPath)).toBeLessThan(104)
@@ -421,7 +428,7 @@ describe("native private sessions", () => {
 })
 
 describe("native source discovery", () => {
-  test("a broker changing to a legacy attachment keeps observation and refuses account/runtime/old-lease changes", async () => {
+  it("a broker changing to a legacy attachment keeps observation and refuses account/runtime/old-lease changes", async () => {
     const owner = await hosted()
     const creator = await openProxySession(options())
     if (creator.kind !== "managed" || creator.lifecycle.kind !== "creator")
@@ -482,7 +489,7 @@ describe("native source discovery", () => {
     await creator.release()
   })
 
-  test("wakes only the fingerprinted native executable with the fixed background argument", async () => {
+  it("wakes only the fingerprinted native executable with the fixed background argument", async () => {
     const app = join(directory, "Copilot Proxy.app", "Contents")
     const executable = join(app, "MacOS", "Copilot Proxy")
     const argumentsPath = join(directory, "background-arguments.json")
@@ -566,7 +573,7 @@ setTimeout(() => { void shutdown() }, 5000)
     }
   }, 10_000)
 
-  test("a missing temporary socket alias stays a known unavailable native session and disposal still converges", async () => {
+  it("a missing temporary socket alias stays a known unavailable native session and disposal still converges", async () => {
     await hosted()
     const live = await record()
     await unlink(dirname(live.socketPath))
@@ -604,6 +611,7 @@ describe("native control platform support", () => {
     for (const platform of ["win32", "linux"] as const) {
       const stateDirectory = join(directory, platform)
       await mkdir(stateDirectory, { mode: 0o755 })
+      const originalMode = (await stat(stateDirectory)).mode
       const owner = authority()
       const cleanup = await hostProxySession(
         {
@@ -632,7 +640,7 @@ describe("native control platform support", () => {
         protocol: 1,
         platform,
       })
-      expect((await stat(stateDirectory)).mode & 0o777).toBe(0o755)
+      expect((await stat(stateDirectory)).mode).toBe(originalMode)
       expect(owner.commands).toHaveLength(0)
       expect((await owner.api.dispatch(options().intent)).kind).toBe("applied")
       const session = await openProxySession({ ...options(), stateDirectory })
@@ -648,6 +656,7 @@ describe("native control platform support", () => {
   test("nonsecret native provenance can persist without Unix permission assumptions, then blocks old CLI credentials", async () => {
     const stateDirectory = join(directory, "windows-state")
     await mkdir(stateDirectory, { mode: 0o755 })
+    const originalMode = (await stat(stateDirectory)).mode
     await writeNativeCredentialProvenance(
       {
         stateDirectory,
@@ -670,10 +679,10 @@ describe("native control platform support", () => {
     expect(
       (await openProxySession({ ...options(), stateDirectory })).kind,
     ).toBe("unavailable")
-    expect((await stat(stateDirectory)).mode & 0o777).toBe(0o755)
+    expect((await stat(stateDirectory)).mode).toBe(originalMode)
   })
 
-  test("a supported private host replaces the unsupported marker only after its validated channel opens", async () => {
+  it("a supported private host replaces the unsupported marker only after its validated channel opens", async () => {
     const stateDirectory = options().stateDirectory
     await writeNativeCredentialProvenance(
       {
@@ -684,10 +693,11 @@ describe("native control platform support", () => {
     )
     expect((await observeProxySession(options())).kind).toBe("unavailable")
     const owner = authority()
-    const cleanup = await hostProxySession(
-      { stateDirectory, authority: owner.api, showUi: () => {} },
-      { platform: "darwin" },
-    )
+    const cleanup = await hostProxySession({
+      stateDirectory,
+      authority: owner.api,
+      showUi: () => {},
+    })
     disposals.push(cleanup)
     expect(
       (await readdir(stateDirectory)).includes(

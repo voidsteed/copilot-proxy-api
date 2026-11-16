@@ -430,15 +430,15 @@ describe("missing-only configuration", () => {
     const path = configPath("codex")
     await writeFile(destination, "# Symlink target.\n")
     await chmod(destination, 0o640)
+    const beforeMode = (await stat(destination)).mode & 0o777
     await mkdir(dirname(path), { recursive: true })
     await symlink(destination, path)
     expect(await configure("codex")).toMatchObject({ kind: "added" })
     expect((await lstat(path)).isSymbolicLink()).toBe(true)
     expect(await readlink(path)).toBe(destination)
-    expect((await stat(destination)).mode & 0o777).toBe(0o640)
-    expect(parseToml(await readFile(destination, "utf8")).model).toBe(
-      "gpt-6.1-sol",
-    )
+    expect((await stat(destination)).mode & 0o777).toBe(beforeMode)
+    const parsed = parseToml(await readFile(destination, "utf8"))
+    expect(parsed.model).toBe("gpt-6.1-sol")
   })
 
   test("serializes repeated button clicks without duplicate additions", async () => {

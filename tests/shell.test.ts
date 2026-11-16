@@ -6,19 +6,43 @@ import { generateEnvScript } from "~/lib/shell"
 
 const exec = promisify(execFile)
 
-test("POSIX launch instructions preserve literal metacharacters and quotes", async () => {
-  const value =
-    "actual key ' \" \\ $(printf injected) `printf injected` $HOME; & |\nsecond line"
-  for (const shell of ["sh", "bash", "zsh"] as const) {
+for (const shell of ["sh", "bash", "zsh"] as const) {
+  const shellPath = Bun.which(shell)
+  if (shellPath === null) {
+    test.skip(`POSIX literal quoting in ${shell} requires an installed shell`, () => {})
+    continue
+  }
+  test(`POSIX launch instructions preserve literal metacharacters and quotes in ${shell}`, async () => {
+    const value =
+      "actual key ' \" \\ $(printf injected) `printf injected` $HOME; & |\nsecond line"
     const script = generateEnvScript(
       { COPILOT_PROXY_TEST_LITERAL: value },
       'node -p "JSON.stringify(process.env.COPILOT_PROXY_TEST_LITERAL)"',
       shell,
     )
-    const result = await exec(`/bin/${shell}`, ["-c", script])
+    const result = await exec(shellPath, ["-c", script])
     expect(JSON.parse(result.stdout)).toBe(value)
-  }
-})
+  })
+}
+
+test.skipIf(process.platform !== "win32")(
+  "native PowerShell launch instructions preserve literal metacharacters and quotes",
+  async () => {
+    const value =
+      "actual key ' \" \\ $(Write-Output injected) `Write-Output injected` $HOME; & | %PATH%\nsecond line"
+    const script = generateEnvScript(
+      { COPILOT_PROXY_TEST_LITERAL: value },
+      "[Console]::Write($env:COPILOT_PROXY_TEST_LITERAL)",
+      "powershell",
+    )
+    const result = await exec("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      script,
+    ])
+    expect(result.stdout).toBe(value)
+  },
+)
 
 test("PowerShell and cmd instructions quote literal values without percent expansion", () => {
   const values = {
