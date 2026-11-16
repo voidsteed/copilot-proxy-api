@@ -8,6 +8,7 @@ import type { ModelsResponse } from "../../src/services/copilot/get-models"
 import type { EngineEvent, EngineInit } from "./protocol"
 
 import { createDesktopProxy } from "../../src/desktop-proxy"
+import { isInferencePath } from "../../src/lib/inference-path"
 import { initProxyFromEnv } from "../../src/lib/proxy"
 import { state } from "../../src/lib/state"
 import { DEFAULT_VSCODE_VERSION } from "../../src/services/get-vscode-version"
@@ -28,6 +29,10 @@ const safePaths = new Set([
   "/embeddings",
   "/v1/embeddings",
 ])
+
+function isSafePath(path: string): boolean {
+  return safePaths.has(path) || isInferencePath(path)
+}
 
 export type DrainResult =
   | { kind: "drained" }
@@ -101,7 +106,7 @@ export async function startEngine(
           /^(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$/.test(summary.method) ?
             summary.method
           : "OTHER",
-        path: safePaths.has(summary.path) ? summary.path : "/unsupported",
+        path: isSafePath(summary.path) ? summary.path : "/unsupported",
         inputTokens: safeTokenCount(summary.inputTokens),
         outputTokens: safeTokenCount(summary.outputTokens),
         cachedTokens: safeTokenCount(summary.cachedTokens),
@@ -204,7 +209,7 @@ export async function createNodeListener(options: {
   const servers = ["127.0.0.1", "::1"].map(() =>
     createServer((incoming, outgoing) => {
       const path = new URL(incoming.url ?? "/", "http://localhost").pathname
-      if (!accepting && incoming.method === "POST" && safePaths.has(path)) {
+      if (!accepting && incoming.method === "POST" && isSafePath(path)) {
         incoming.resume()
         outgoing.writeHead(503, {
           "content-type": "application/json",

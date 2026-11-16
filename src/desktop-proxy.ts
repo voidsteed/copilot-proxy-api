@@ -11,6 +11,7 @@ import {
 } from "./lib/request-log"
 import { completionRoutes } from "./routes/chat-completions/route"
 import { embeddingRoutes } from "./routes/embeddings/route"
+import { geminiRoutes } from "./routes/gemini/route"
 import { messageRoutes } from "./routes/messages/route"
 import { modelRoutes } from "./routes/models/route"
 import { responsesRoutes } from "./routes/responses/route"
@@ -60,13 +61,32 @@ export function createDesktopProxy(options: {
     }
     const authorization = c.req.header("authorization")
     const apiKey = c.req.header("x-api-key")
+    const googleKey = c.req.header("x-goog-api-key")
     const bearer = authorization?.match(/^Bearer (\S+)$/i)?.[1]
+    const credentials = [
+      authorization === undefined ? undefined : (bearer ?? ""),
+      apiKey,
+      googleKey,
+    ].filter((credential) => credential !== undefined)
     if (
       authentication.kind === "keyed"
-      && ((!authorization && !apiKey)
-        || (authorization !== undefined && (!bearer || !matchesKey(bearer)))
-        || (apiKey !== undefined && !matchesKey(apiKey)))
+      && (credentials.length === 0
+        || !credentials.every((credential) => matchesKey(credential)))
     ) {
+      if (
+        c.req.path === "/v1beta/models"
+        || c.req.path.startsWith("/v1beta/models/")
+      )
+        return c.json(
+          {
+            error: {
+              code: 401,
+              status: "UNAUTHENTICATED",
+              message: "Missing or invalid gateway key",
+            },
+          },
+          401,
+        )
       return c.json(
         {
           error: {
@@ -85,6 +105,7 @@ export function createDesktopProxy(options: {
       AsyncLocalStorage.bind(options.onComplete),
     )(context, next),
   )
+  app.route("/v1beta/models", geminiRoutes)
   app.get("/", (c) => c.json({ service: "Copilot Proxy" }))
   for (const prefix of ["", "/v1"]) {
     app.route(`${prefix}/models`, modelRoutes)

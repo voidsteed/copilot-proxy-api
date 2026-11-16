@@ -205,6 +205,43 @@ async function waitFor(predicate: () => boolean) {
 }
 
 describe("CLI shares the native authority", () => {
+  test("Start help exposes the explicit standalone mode", () => {
+    const child = Bun.spawnSync([
+      process.execPath,
+      new URL("../src/main.ts", import.meta.url).pathname,
+      "start",
+      "--help",
+    ])
+    expect(child.exitCode).toBe(0)
+    expect(child.stdout.toString()).toContain("--standalone")
+  })
+
+  test("explicit standalone rejects a private profile before contacting its native owner", async () => {
+    const shared = await owner()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 100)
+    try {
+      await runStart({
+        ...roots(),
+        values: { ...values, standalone: true },
+        explicit: {},
+        signal: controller.signal,
+      }).then(
+        () => {
+          throw new Error("Expected standalone profile rejection")
+        },
+        (error: unknown) => {
+          expect(error instanceof Error && error.message).toContain(
+            "Standalone CLI authentication uses the standard user home.",
+          )
+        },
+      )
+      expect(shared.commands).toEqual([])
+    } finally {
+      clearTimeout(timer)
+    }
+  })
+
   test("default Start attaches without resetting enterprise options, then recognizes Stop from another client", async () => {
     const shared = await owner()
     const pending = runStart({
@@ -350,6 +387,9 @@ describe("CLI shares the native authority", () => {
     expect(explicitCliRuntime({ values, rawArgs: ["--api-key", ""] })).toEqual({
       authentication: { kind: "none" },
     })
+    expect(explicitCliRuntime({ values, rawArgs: ["--standalone"] })).toEqual(
+      {},
+    )
     expect(
       explicitCliRuntime({
         values: { ...values, verbose: true, rateLimitWait: true },

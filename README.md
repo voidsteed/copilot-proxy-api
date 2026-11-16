@@ -256,6 +256,10 @@ These endpoints are designed to be compatible with the Anthropic Messages API.
 | `POST /v1/messages`              | `POST` | Creates a model response for a given conversation.           |
 | `POST /v1/messages/count_tokens` | `POST` | Calculates the number of tokens for a given set of messages. |
 
+### Gemini-compatible endpoints
+
+Google models in your Copilot account are available through `/v1beta/models`, `:generateContent`, and `:streamGenerateContent?alt=sse`. Antigravity CLI can use this API with `modelProvider: "gemini"`, `GOOGLE_GEMINI_BASE_URL`, and a local proxy key. See [Antigravity CLI setup and supported requests](docs/antigravity-cli.md).
+
 ### Usage Monitoring Endpoints
 
 New endpoints for monitoring your Copilot usage and quotas.

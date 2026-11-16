@@ -767,3 +767,38 @@ describe("desktop command results and startup intent", () => {
     unsubscribe()
   }, 10000)
 })
+
+test("native Google generation activity retains exact inference paths once without credentials", async () => {
+  const runtime = await proxy()
+  const paths = [
+    "/v1beta/models/gemini-fixture:generateContent",
+    "/v1beta/models/gemini-fixture:streamGenerateContent",
+  ]
+  for (const path of paths) {
+    const response = await fetch(
+      `${runtime.origin}${path}?alt=sse&key=query-private`,
+      {
+        method: "POST",
+        headers: { "x-goog-api-key": gatewayKey },
+        body: "invalid JSON",
+      },
+    )
+    expect(response.status).toBe(400)
+    expect(await response.json()).toHaveProperty(
+      "error.status",
+      "INVALID_ARGUMENT",
+    )
+  }
+  await eventually(() => runtime.activity.length === 2)
+  expect(runtime.activity.map((record) => record.path)).toEqual(paths)
+  expect(runtime.activity.every((record) => record.outcome === "failed")).toBe(
+    true,
+  )
+  expect(
+    runtime.activity.every(
+      (record) => record.inputTokens === null && record.model === null,
+    ),
+  ).toBe(true)
+  for (const secret of [gatewayKey, "query-private", "x-goog-api-key"])
+    expect(JSON.stringify(runtime.activity)).not.toContain(secret)
+}, 15000)
