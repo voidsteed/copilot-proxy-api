@@ -296,3 +296,66 @@ describe("requestLogMiddleware hardening", () => {
     expect(stripAnsi(logs[0] ?? "")).not.toContain("SECRET_VALUE")
   })
 })
+
+describe("requestLogMiddleware Gemini SSE", () => {
+  test.each([
+    "/v1beta/models/gemini-4-neon:streamGenerateContent",
+    "/v1/models/gemini-4-neon:streamGenerateContent",
+  ])(
+    "extracts Gemini SSE usageMetadata and detects truncated streams on %s",
+    async (path) => {
+      setModel("gemini-4-neon")
+      const logs: Array<string> = []
+      const app = new Hono()
+      app.use(createRequestLogMiddleware((line) => logs.push(line)))
+      app.post(path, (c) => {
+        setRequestLogMetadata(c, { model: "gemini-4-neon", effort: "xhigh" })
+        const truncated = c.req.query("truncated") === "1"
+        const body =
+          truncated ?
+            `data: ${JSON.stringify({
+              candidates: [
+                {
+                  index: 0,
+                  content: { role: "model", parts: [{ text: "partial" }] },
+                },
+              ],
+            })}\n\n`
+          : `data: ${JSON.stringify({
+              candidates: [
+                {
+                  index: 0,
+                  content: { role: "model", parts: [{ text: "done" }] },
+                  finishReason: "STOP",
+                },
+              ],
+              usageMetadata: {
+                promptTokenCount: 15_000,
+                candidatesTokenCount: 420,
+                cachedContentTokenCount: 5_000,
+              },
+            })}\n\n`
+        return new Response(body, {
+          headers: { "content-type": "text/event-stream" },
+        })
+      })
+
+      await (await app.request(`${path}?alt=sse`, { method: "POST" })).text()
+      await (
+        await app.request(`${path}?alt=sse&truncated=1`, { method: "POST" })
+      ).text()
+
+      expect(logs).toHaveLength(2)
+      const completeLine = stripAnsi(logs[0] ?? "")
+      expect(completeLine).toContain("gemini-4-neon")
+      expect(completeLine).toContain("xhigh")
+      expect(completeLine).toContain("tokens ↑  15K cache   5K ↓  420")
+      expect(completeLine).not.toContain("closed before")
+
+      const truncatedLine = stripAnsi(logs[1] ?? "")
+      expect(truncatedLine).toContain(
+        "Gemini stream closed before a terminal event",
+      )
+    },
+  )
+})

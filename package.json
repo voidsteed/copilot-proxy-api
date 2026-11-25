@@ -1,14 +1,17 @@
 {
   "name": "copilot-proxy-api",
   "version": "0.10.32",
-  "description": "Self-hosted GitHub Copilot bridge for Claude Code and Codex CLI with OpenAI Responses, Anthropic Messages, streaming resilience, and context management.",
+  "description": "Self-hosted GitHub Copilot bridge for Claude Code, Codex CLI, and Antigravity CLI with OpenAI Responses, Anthropic Messages, Gemini API, streaming resilience, and context management.",
   "keywords": [
     "proxy",
     "github-copilot",
     "openai-compatible",
     "anthropic-compatible",
+    "gemini-compatible",
     "codex",
-    "claude-code"
+    "claude-code",
+    "antigravity",
+    "agy"
   ],
   "homepage": "https://github.com/voidsteed/copilot-proxy-api",
   "bugs": "https://github.com/voidsteed/copilot-proxy-api/issues",

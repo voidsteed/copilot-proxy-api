@@ -1,6 +1,6 @@
-# Copilot Proxy API for Claude Code and Codex CLI
+# Copilot Proxy API for Claude Code, Codex CLI, and Antigravity CLI
 
-Self-hosted GitHub Copilot bridge for Claude Code and Codex CLI with OpenAI Responses, Anthropic Messages, streaming resilience, and context management.
+Self-hosted GitHub Copilot bridge for Claude Code, Codex CLI, and Antigravity CLI (`agy`) with OpenAI Responses, Anthropic Messages, Gemini API, streaming resilience, and context management.
 
 [![CI](https://github.com/voidsteed/copilot-proxy-api/actions/workflows/ci.yml/badge.svg)](https://github.com/voidsteed/copilot-proxy-api/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/copilot-proxy-api.svg)](https://www.npmjs.com/package/copilot-proxy-api)
@@ -17,7 +17,7 @@ npx copilot-proxy-api@latest start --claude-code
 
 Complete the GitHub sign-in, choose your models, then paste the generated Claude Code command into a new terminal.
 
-**Client guides:** [Claude Code](#using-with-claude-code) · [Codex CLI](#using-with-codex-cli) · [Generic OpenAI and Anthropic clients](#api-endpoints)
+**Client guides:** [Claude Code](#using-with-claude-code) · [Codex CLI](#using-with-codex-cli) · [Antigravity CLI (agy)](#using-with-antigravity-cli-agy) · [Generic OpenAI, Anthropic, and Gemini clients](#api-endpoints)
 
 ### See It in Action (30 Seconds)
 
@@ -33,6 +33,7 @@ This fork keeps the original bridge practical for current coding agents:
 - Active maintenance for current Copilot models and client compatibility changes.
 - First-class Claude Code support through the Anthropic Messages API and an interactive setup command.
 - Codex CLI support through the OpenAI Responses API.
+- Antigravity CLI (`agy`) support through Gemini-compatible `/v1/models` and `/v1beta/models` endpoints.
 - More resilient agent sessions with streaming keepalives, structured error handling, and context management.
 - Built-in usage visibility, quota checks, rate limiting, and manual request approval.
 
@@ -55,13 +56,14 @@ This project is a fork of [copilot-api](https://github.com/ericc-ch/copilot-api)
 
 ## Project Overview
 
-`copilot-proxy-api` translates the API shapes used by coding agents into GitHub Copilot requests. It supports OpenAI Chat Completions and Responses plus Anthropic Messages, with compatibility work centered on Claude Code, Codex CLI, and long-running agent sessions.
+`copilot-proxy-api` translates the API shapes used by coding agents into GitHub Copilot requests. It supports OpenAI Chat Completions and Responses, Anthropic Messages, and Gemini endpoints, with compatibility work centered on Claude Code, Codex CLI, Antigravity CLI (`agy`), and long-running agent sessions.
 
 ## Features
 
-- **OpenAI & Anthropic Compatibility**: Exposes GitHub Copilot as an OpenAI-compatible (`/v1/chat/completions`, `/v1/responses`, `/v1/models`, `/v1/embeddings`) and Anthropic-compatible (`/v1/messages`) API.
+- **OpenAI, Anthropic, and Gemini Compatibility**: Exposes GitHub Copilot as an OpenAI-compatible (`/v1/chat/completions`, `/v1/responses`, `/v1/models`, `/v1/embeddings`), Anthropic-compatible (`/v1/messages`), and Gemini-compatible (`/v1/models`, `/v1beta/models`) API.
 - **Codex CLI Integration**: Use with [OpenAI Codex CLI](https://github.com/openai/codex) via the Responses API endpoint.
-- **Claude Code Integration**: Easily configure and launch [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) to use Copilot as its backend with a simple command-line flag (`--claude-code`).
+- **Claude Code Integration**: Configure and launch [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) to use Copilot as its backend with a command-line flag (`--claude-code`).
+- **Antigravity CLI (`agy`) Integration**: Connect Antigravity CLI 1.5.12 or later to Google chat models on your Copilot plan through the Gemini endpoints with `GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_KEY`.
 - **Usage Dashboard**: A web-based dashboard to monitor your Copilot API usage, view quotas, and see detailed statistics.
 - **Rate Limit Control**: Manage API usage with rate-limiting options (`--rate-limit`) and a waiting mechanism (`--wait`) to prevent errors from rapid requests.
 - **Manual Request Approval**: Manually approve or deny each API request for fine-grained control over usage (`--manual`).
@@ -255,6 +257,26 @@ These endpoints are designed to be compatible with the Anthropic Messages API.
 | -------------------------------- | ------ | ------------------------------------------------------------ |
 | `POST /v1/messages`              | `POST` | Creates a model response for a given conversation.           |
 | `POST /v1/messages/count_tokens` | `POST` | Calculates the number of tokens for a given set of messages. |
+
+### Gemini Compatible Endpoints
+
+The Gemini API exposes Google chat models from your Copilot account on the same proxy port under both `/v1/models` and `/v1beta/models`.
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/v1/models`, `/v1beta/models` | GET | List Google chat models (`/v1/models` uses Gemini format when `x-goog-api-key` is sent). |
+| `/v1/models/{id}`, `/v1beta/models/{id}` | GET | Get a model and its token limits. |
+| `/v1/models/{id}:generateContent`, `/v1beta/models/{id}:generateContent` | POST | Generate a Gemini response. |
+| `/v1/models/{id}:streamGenerateContent?alt=sse`, `/v1beta/models/{id}:streamGenerateContent?alt=sse` | POST | Stream a Gemini response. |
+
+To use Gemini 4 Neon from Antigravity CLI 1.5.12 or later, start the usual proxy on port 4141 and run the following command. If the proxy requires an API key, set `GEMINI_API_KEY` to that local proxy key.
+
+```sh
+GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:4141 GEMINI_API_KEY=local-proxy \
+  agy --settings '{"modelProvider":"gemini"}' --model gemini-4-neon --effort xhigh
+```
+
+Only models and features backed by GitHub Copilot's `/chat/completions` API are served. Gemini server-side tools (such as `googleSearch`, used by `agy`'s `search_web` tool) are rejected rather than spoofed. Requests for `gemini-3.1-flash-lite-preview` (used by `agy`'s `sir_flash_lite` monitor and `flash_lite` subagents) fall back to `gemini-3.8-flash` when absent from Copilot's catalog, and `thinkingLevel: "MINIMAL"` maps to `low`.
 
 ### Usage Monitoring Endpoints
 
@@ -474,6 +496,89 @@ bun run test:codex
 
 This checks text, shell tool calls/results, resumed history, images, and HTTP cancellation using an isolated temporary Codex configuration. It makes real Copilot requests. Override the source proxy with `COPILOT_PROXY_URL` or the model with `CODEX_SMOKE_MODEL`; for business/enterprise accounts set `COPILOT_ACCOUNT_TYPE` accordingly.
 
+
+## Using with Antigravity CLI (agy)
+
+This proxy connects Antigravity CLI (`agy`) 1.5.12 or later to Google chat models on your GitHub Copilot plan through `/v1beta/models` (and also serves Gemini v1 clients on `/v1/models`).
+
+### One-command launch
+
+Start the proxy in one terminal, then launch `agy` in a second terminal with session-only settings so your existing `~/.gemini/antigravity-cli/settings.json` stays unchanged:
+
+```sh
+# Terminal 1: start the proxy
+npx copilot-proxy-api@latest start
+
+# Terminal 2: launch agy against the proxy
+GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:4141 GEMINI_API_KEY=local-proxy \
+  agy --settings '{"modelProvider":"gemini"}' --model gemini-4-neon --effort xhigh
+```
+
+If you start the proxy with `--api-key <secret>`, pass that same value in `GEMINI_API_KEY`. `agy` sends it in the `x-goog-api-key` header and never forwards it to GitHub Copilot. Leave `/v1` and `/v1beta` off `GOOGLE_GEMINI_BASE_URL` because `agy` appends `/v1beta/models/...` itself.
+
+### Persistent setup
+
+To avoid passing `--settings` and environment variables on every run:
+
+1. Set `modelProvider` in `~/.gemini/antigravity-cli/settings.json`:
+
+   ```json
+   {
+     "modelProvider": "gemini"
+   }
+   ```
+
+2. Export the base URL and key in `~/.zshrc` or `~/.bashrc`:
+
+   ```sh
+   export GOOGLE_GEMINI_BASE_URL="http://127.0.0.1:4141"
+   export GEMINI_API_KEY="local-proxy"
+   ```
+
+3. Start `agy` with a Google model from your Copilot plan:
+
+   ```sh
+   agy --model gemini-4-neon --effort xhigh
+   ```
+
+To test the setup non-interactively, run:
+
+```sh
+GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:4141 GEMINI_API_KEY=local-proxy \
+  agy --settings '{"modelProvider":"gemini"}' --model gemini-4-neon --effort low \
+  -p "Say exactly: proxy ok"
+```
+
+### Switching back to your Google account
+
+Remove `"modelProvider"` from `~/.gemini/antigravity-cli/settings.json`, unset `GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_KEY`, and restart `agy`.
+
+### Supported models and Copilot compatibility
+
+List the Google chat models your Copilot account exposes:
+
+```sh
+curl -H "x-goog-api-key: local-proxy" http://127.0.0.1:4141/v1beta/models
+```
+
+You can query `/v1/models` with the same `x-goog-api-key` header to get the Gemini list format while leaving plain `GET /v1/models` in OpenAI format for other tools.
+
+What works with Copilot:
+
+- Streaming (`:streamGenerateContent?alt=sse`) and non-streaming (`:generateContent`) generation on both `/v1beta/models` and `/v1/models`.
+- Function calling, parallel tool calls, and `thoughtSignature` round-trips across turns.
+- Reasoning levels `LOW`, `MEDIUM`, `HIGH`, and `XHIGH` (validated against each model's advertised Copilot support), `MINIMAL` mapped to `low`, and dynamic `thinkingBudget: -1`.
+- Inline images (`image/jpeg`, `image/png`, `image/webp`, `image/heic`, and `image/heif`) in user turns and `functionResponse.parts`. When a long session accumulates more images than a Copilot model's `max_prompt_images` cap (10 on current Google models) or includes an image over `max_prompt_image_size` (3 MB), the proxy keeps the newest images within the cap and replaces omitted ones with text notes so the session does not fail with HTTP 400.
+- PDF attachments (`application/pdf`) in user turns and `functionResponse.parts` via local text extraction (`pdf-parse`).
+- Fallback from `gemini-3.1-flash-lite-preview` (used by `agy`'s `sir_flash_lite` monitor and `flash_lite` subagents) to `gemini-3.8-flash` when Copilot omits that model. If Copilot adds `gemini-3.1-flash-lite-preview` natively, the proxy uses the exact model instead.
+
+Known gaps (not provided by GitHub Copilot):
+
+- **No server-side Gemini tools.** `googleSearch` (used by `agy`'s `search_web` tool), `urlContext`, and `codeExecution` return HTTP 400 rather than returning spoofed results.
+- **No `image/gif`.** Copilot rejects GIF images upstream, so the proxy rejects `image/gif` with HTTP 400.
+- **No fixed thinking budgets or Gemini-only request fields.** Non-negative `thinkingBudget` values (`0` or positive), `safetySettings`, `cachedContent`, `fileData`, and `responseSchema` return HTTP 400.
+- **No image-only PDFs.** PDF support extracts text only; scanned or image-only PDFs lose visual content.
+
 ## Running from Source
 
 The project can be run from source in several ways:
@@ -497,3 +602,4 @@ bun run start
   - `--rate-limit <seconds>`: Enforces a minimum time interval between requests. For example, `copilot-proxy-api start --rate-limit 30` will ensure there's at least a 30-second gap between requests.
   - `--wait`: Use this with `--rate-limit`. It makes the server wait for the cooldown period to end instead of rejecting the request with an error. This is useful for clients that don't automatically retry on rate limit errors.
 - If you have a GitHub business or enterprise plan account with Copilot, use the `--account-type` flag (e.g., `--account-type business`). See the [official documentation](https://docs.github.com/en/enterprise-cloud@latest/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-access-to-github-copilot-in-your-organization/managing-github-copilot-access-to-your-organizations-network#configuring-copilot-subscription-based-network-routing-for-your-enterprise-or-organization) for more details.
+

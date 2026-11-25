@@ -1,9 +1,10 @@
 import { copilotBaseUrl, copilotHeaders } from "~/lib/api-config"
+import { copilotFetch } from "~/lib/copilot-fetch"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
 
 export const getModels = async () => {
-  const response = await fetch(`${copilotBaseUrl(state)}/models`, {
+  const response = await copilotFetch(`${copilotBaseUrl(state)}/models`, {
     headers: copilotHeaders(state),
   })
 
@@ -17,11 +18,18 @@ export interface ModelsResponse {
   object: string
 }
 
+interface ModelVisionLimits {
+  max_prompt_image_size?: number
+  max_prompt_images?: number
+  supported_media_types?: Array<string>
+}
+
 interface ModelLimits {
   max_context_window_tokens?: number
   max_output_tokens?: number
   max_prompt_tokens?: number
   max_inputs?: number
+  vision?: ModelVisionLimits
 }
 
 interface ModelSupports {

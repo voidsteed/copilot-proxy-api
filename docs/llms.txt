@@ -1,19 +1,26 @@
 # Copilot Proxy API
 
-> Self-hosted proxy that exposes GitHub Copilot as an OpenAI-compatible and
-> Anthropic-compatible API, so coding agents like Claude Code and Codex CLI can
-> use a GitHub Copilot subscription as their model backend.
+> Self-hosted proxy that exposes GitHub Copilot as an OpenAI-compatible,
+> Anthropic-compatible, and Gemini-compatible API, so coding agents like Claude
+> Code, Codex CLI, and Antigravity CLI (agy) can use a GitHub Copilot
+> subscription as their model backend.
 
 Unofficial, reverse-engineered, MIT-licensed. Not affiliated with GitHub. Runs
 locally on port 4141 by default and requires an active Copilot subscription.
 
 ## What it does
 
-- Serves `POST /v1/messages` (Anthropic Messages) — used by Claude Code.
-- Serves `POST /v1/responses` (OpenAI Responses) — used by Codex CLI.
-- Serves `POST /v1/chat/completions`, `GET /v1/models`, `POST /v1/embeddings`.
-- Translates Anthropic requests to Copilot's format and back; the Responses
-  route is a direct passthrough to Copilot's own Responses endpoint.
+- Serves `POST /v1/messages` (Anthropic Messages), used by Claude Code.
+- Serves `POST /v1/responses` (OpenAI Responses), used by Codex CLI.
+- Serves `GET /v1/models`, `GET /v1beta/models`, `GET /v1/models/{id}`,
+  `GET /v1beta/models/{id}`, `POST /v1/models/{id}:generateContent`,
+  `POST /v1beta/models/{id}:generateContent`,
+  `POST /v1/models/{id}:streamGenerateContent?alt=sse`, and
+  `POST /v1beta/models/{id}:streamGenerateContent?alt=sse` (Gemini API), used by
+  Antigravity CLI (`agy`).
+- Serves `POST /v1/chat/completions` and `POST /v1/embeddings`.
+- Translates Anthropic and Gemini requests to Copilot's format and back. The
+  Responses route is a passthrough to Copilot's own Responses endpoint.
 
 ## Getting started with Claude Code
 
@@ -38,9 +45,35 @@ base_url = "http://localhost:4141/v1"
 wire_api = "responses"
 ```
 
-`base_url` must end in `/v1` — Codex appends `/responses` itself. Setting
+`base_url` must end in `/v1` because Codex appends `/responses` itself. Setting
 `OPENAI_BASE_URL` alone does not work on recent Codex versions. Pick a model id
 that your plan advertises at `GET /v1/models`.
+
+## Getting started with Antigravity CLI (agy)
+
+Requires Antigravity CLI 1.5.12 or later. Start the proxy with
+`npx copilot-proxy-api@latest start`, then launch `agy` against it:
+
+```sh
+GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:4141 GEMINI_API_KEY=local-proxy \
+  agy --settings '{"modelProvider":"gemini"}' --model gemini-4-neon --effort xhigh
+```
+
+For persistent setup, set `"modelProvider": "gemini"` in
+`~/.gemini/antigravity-cli/settings.json` and export `GOOGLE_GEMINI_BASE_URL`
+and `GEMINI_API_KEY` in your shell profile. If the proxy runs with `--api-key`,
+set `GEMINI_API_KEY` to that same key. Leave `/v1` and `/v1beta` off
+`GOOGLE_GEMINI_BASE_URL` because `agy` appends `/v1beta/models/...` itself.
+
+Supported Gemini features match Copilot's `/chat/completions` capabilities:
+streaming SSE, non-streaming generation, function calling, parallel tool calls,
+`thoughtSignature` round-trips, `thinkingLevel` (`MINIMAL` mapped to `low`,
+`LOW`, `MEDIUM`, `HIGH`, `XHIGH`), dynamic `thinkingBudget: -1`, inline images
+(`image/jpeg`, `image/png`, `image/webp`, `image/heic`, `image/heif`), and local
+PDF text extraction (`application/pdf`). Requests for
+`gemini-3.1-flash-lite-preview` fall back to `gemini-3.8-flash` when absent from
+Copilot's catalog. Server-side Gemini tools (`googleSearch`, `urlContext`,
+`codeExecution`) are rejected with HTTP 400.
 
 ## Links
 

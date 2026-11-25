@@ -13,15 +13,16 @@
     </script>
 
     <title>
-      Copilot Proxy API — GitHub Copilot for Claude Code and Codex CLI
+      Copilot Proxy API — GitHub Copilot for Claude Code, Codex CLI, and
+      Antigravity CLI
     </title>
     <meta
       name="description"
-      content="Self-hosted GitHub Copilot bridge for Claude Code and Codex CLI with OpenAI Responses, Anthropic Messages, streaming resilience, and context management."
+      content="Self-hosted GitHub Copilot bridge for Claude Code, Codex CLI, and Antigravity CLI (agy) with OpenAI Responses, Anthropic Messages, Gemini API, streaming resilience, and context management."
     />
     <meta
       name="keywords"
-      content="github copilot proxy, claude code, codex cli, anthropic messages api, openai responses api, copilot openai compatible, self-hosted llm proxy"
+      content="github copilot proxy, claude code, codex cli, antigravity cli, agy, gemini api, anthropic messages api, openai responses api, copilot openai compatible, self-hosted llm proxy"
     />
     <meta name="author" content="voidsteed" />
     <meta name="theme-color" content="#1d2021" />
@@ -43,11 +44,11 @@
     <meta property="og:site_name" content="Copilot Proxy API" />
     <meta
       property="og:title"
-      content="Copilot Proxy API for Claude Code and Codex CLI"
+      content="Copilot Proxy API for Claude Code, Codex CLI, and Antigravity CLI"
     />
     <meta
       property="og:description"
-      content="Self-hosted GitHub Copilot bridge for Claude Code and Codex CLI with OpenAI Responses, Anthropic Messages, streaming resilience, and context management."
+      content="Self-hosted GitHub Copilot bridge for Claude Code, Codex CLI, and Antigravity CLI (agy) with OpenAI Responses, Anthropic Messages, Gemini API, streaming resilience, and context management."
     />
     <meta
       property="og:url"
@@ -61,17 +62,17 @@
     <meta property="og:image:height" content="640" />
     <meta
       property="og:image:alt"
-      content="Copilot Proxy API connects GitHub Copilot to Claude Code, Codex CLI, and compatible API clients."
+      content="Copilot Proxy API connects GitHub Copilot to Claude Code, Codex CLI, Antigravity CLI, and compatible API clients."
     />
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta
       name="twitter:title"
-      content="Copilot Proxy API for Claude Code and Codex CLI"
+      content="Copilot Proxy API for Claude Code, Codex CLI, and Antigravity CLI"
     />
     <meta
       name="twitter:description"
-      content="Self-hosted GitHub Copilot bridge for Claude Code and Codex CLI with OpenAI Responses, Anthropic Messages, streaming resilience, and context management."
+      content="Self-hosted GitHub Copilot bridge for Claude Code, Codex CLI, and Antigravity CLI (agy) with OpenAI Responses, Anthropic Messages, Gemini API, streaming resilience, and context management."
     />
     <meta
       name="twitter:image"
@@ -89,14 +90,14 @@
             "@id": "https://voidsteed.github.io/copilot-proxy-api/#software",
             "name": "Copilot Proxy API",
             "alternateName": "copilot-proxy-api",
-            "description": "Self-hosted GitHub Copilot bridge for Claude Code and Codex CLI with OpenAI Responses, Anthropic Messages, streaming resilience, and context management.",
+            "description": "Self-hosted GitHub Copilot bridge for Claude Code, Codex CLI, and Antigravity CLI (agy) with OpenAI Responses, Anthropic Messages, Gemini API, streaming resilience, and context management.",
             "codeRepository": "https://github.com/voidsteed/copilot-proxy-api",
             "programmingLanguage": "TypeScript",
             "license": "https://github.com/voidsteed/copilot-proxy-api/blob/master/LICENSE",
             "runtimePlatform": "Node.js",
             "applicationCategory": "DeveloperApplication",
             "operatingSystem": "Linux, macOS, Windows",
-            "keywords": "GitHub Copilot, Claude Code, Codex CLI, OpenAI Responses API, Anthropic Messages API, proxy",
+            "keywords": "GitHub Copilot, Claude Code, Codex CLI, Antigravity CLI, agy, OpenAI Responses API, Anthropic Messages API, Gemini API, proxy",
             "url": "https://voidsteed.github.io/copilot-proxy-api/",
             "author": {
               "@type": "Person",
@@ -127,6 +128,14 @@
                 "acceptedAnswer": {
                   "@type": "Answer",
                   "text": "Start the proxy with 'npx copilot-proxy-api@latest start', then add a custom model provider to ~/.codex/config.toml with base_url = \"http://localhost:4141/v1\" and wire_api = \"responses\". Codex then calls Copilot through the OpenAI Responses API."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How do I use GitHub Copilot with Antigravity CLI (agy)?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Start the proxy with 'npx copilot-proxy-api@latest start', then launch agy 1.5.12 or later with GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:4141 GEMINI_API_KEY=local-proxy agy --settings '{\"modelProvider\":\"gemini\"}' --model gemini-4-neon --effort xhigh."
                 }
               },
               {
@@ -164,6 +173,7 @@
         <nav class="site-nav" aria-label="Primary navigation">
           <a class="nav-docs" href="#quick-start">Claude Code</a>
           <a class="nav-docs" href="#codex-quick-start">Codex CLI</a>
+          <a class="nav-docs" href="#agy-quick-start">Antigravity CLI</a>
           <a href="dashboard.html">Dashboard</a>
           <a
             href="https://github.com/voidsteed/copilot-proxy-api"
@@ -180,8 +190,8 @@
         <div class="hero-copy reveal">
           <h1 id="hero-title">Copilot meets your coding agents.</h1>
           <p>
-            Use GitHub Copilot from Claude Code, Codex CLI, and compatible API
-            clients through one compatibility bridge.
+            Use GitHub Copilot from Claude Code, Codex CLI, Antigravity CLI, and
+            compatible API clients through one bridge.
           </p>
           <div class="hero-actions">
             <a class="button button-primary" href="#quick-start"
@@ -189,6 +199,9 @@
             >
             <a class="button button-secondary" href="#codex-quick-start"
               >Start with Codex CLI</a
+            >
+            <a class="button button-secondary" href="#agy-quick-start"
+              >Start with Antigravity CLI</a
             >
             <a
               class="button button-ghost"
@@ -239,6 +252,10 @@
           <div>
             <span>Anthropic Messages</span>
             <code>/v1/messages</code>
+          </div>
+          <div>
+            <span>Gemini API</span>
+            <code>/v1/models · /v1beta/models</code>
           </div>
           <div>
             <span>Chat Completions</span>
@@ -392,6 +409,84 @@ wire_api = "responses"</code></pre>
         ></p>
       </section>
 
+      <section
+        class="section shell quick-start codex-quick-start"
+        id="agy-quick-start"
+        aria-labelledby="agy-quick-start-title"
+      >
+        <div class="section-heading">
+          <h2 id="agy-quick-start-title">Antigravity CLI in one command.</h2>
+          <p>
+            Antigravity CLI (<code>agy</code>) reaches Google chat models on
+            your Copilot plan through the Gemini endpoints. Launch a session
+            without changing saved settings, or pin
+            <code>"modelProvider": "gemini"</code> in
+            <code>~/.gemini/antigravity-cli/settings.json</code>.
+          </p>
+        </div>
+
+        <div class="quick-start-grid">
+          <div class="code-panel">
+            <div class="code-panel-bar">
+              <span>Terminal</span>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy-target="agy-command"
+                data-copy-status="agy-copy-status"
+                data-copy-label="Antigravity CLI command copied to your clipboard."
+              >
+                Copy
+              </button>
+            </div>
+            <pre class="code-block"><code id="agy-command">GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:4141 \
+GEMINI_API_KEY=local-proxy \
+  agy --settings '{"modelProvider":"gemini"}' \
+  --model gemini-4-neon --effort xhigh</code></pre>
+            <p class="code-note">
+              Requires Antigravity CLI 1.5.12 or later. Omit
+              <code>/v1</code> and <code>/v1beta</code> from
+              <code>GOOGLE_GEMINI_BASE_URL</code> because
+              <code>agy</code> appends <code>/v1beta/models/...</code> itself.
+            </p>
+          </div>
+
+          <div class="setup-path">
+            <article>
+              <h3>Start the proxy</h3>
+              <p>
+                Run <code>npx copilot-proxy-api@latest start</code> and complete
+                GitHub sign-in. If you pass <code>--api-key</code>, put the same
+                key in <code>GEMINI_API_KEY</code>.
+              </p>
+            </article>
+            <article>
+              <h3>Check Google models</h3>
+              <p>
+                Query <code>/v1beta/models</code> or <code>/v1/models</code>
+                with <code>x-goog-api-key</code> to list the Google chat models
+                and token limits on your plan.
+              </p>
+            </article>
+            <article>
+              <h3>Launch agy</h3>
+              <p>
+                Run the command for a single session, or add
+                <code>"modelProvider": "gemini"</code> to
+                <code>settings.json</code> and export the two variables in your
+                shell profile.
+              </p>
+            </article>
+          </div>
+        </div>
+        <p
+          class="copy-status"
+          id="agy-copy-status"
+          role="status"
+          aria-live="polite"
+        ></p>
+      </section>
+
       <section class="section shell clients" aria-labelledby="clients-title">
         <div class="section-heading narrow">
           <h2 id="clients-title">Familiar clients. Compatible routes.</h2>
@@ -420,8 +515,16 @@ wire_api = "responses"</code></pre>
           </article>
           <article>
             <div>
+              <h3>Antigravity CLI (agy)</h3>
+              <p>Gemini API (v1 and v1beta)</p>
+            </div>
+            <code>POST /v1beta/models/{id}:streamGenerateContent</code>
+            <a href="#agy-quick-start">Setup guide</a>
+          </article>
+          <article>
+            <div>
               <h3>API clients</h3>
-              <p>OpenAI-compatible and Anthropic-compatible tools</p>
+              <p>OpenAI, Anthropic, and Gemini compatible tools</p>
             </div>
             <code>http://localhost:4141</code>
             <a
@@ -446,14 +549,16 @@ wire_api = "responses"</code></pre>
 
         <div class="capability-grid">
           <article class="capability capability-wide">
-            <h3>Two API shapes, one process</h3>
+            <h3>Three API shapes, one process</h3>
             <p>
-              Serve OpenAI Responses and Chat Completions alongside Anthropic
-              Messages from the same endpoint.
+              Serve OpenAI Responses and Chat Completions, Anthropic Messages,
+              and Gemini endpoints from the same port.
             </p>
             <div class="route-pair">
               <code>/v1/responses</code>
               <code>/v1/messages</code>
+              <code>/v1/models</code>
+              <code>/v1beta/models</code>
             </div>
           </article>
           <article class="capability capability-accent">

@@ -90,6 +90,127 @@ const TOKEN_RESERVE = 8_000
 const PRUNED_PLACEHOLDER = "[content pruned — tool output was too old]"
 const TOOL_TRUNCATED_SUFFIX = "\n\n[…tool output truncated to fit context]"
 const IMAGE_STRIPPED_PLACEHOLDER = "[image removed to save context]"
+const IMAGE_LIMIT_PLACEHOLDER =
+  "[earlier image omitted to fit Copilot's image limit]"
+
+function decodedDataUrlBytes(url: string): number | undefined {
+  const marker = ";base64,"
+  const index = url.indexOf(marker)
+  if (!url.startsWith("data:") || index === -1) return undefined
+  const base64 = url.slice(index + marker.length)
+  let padding = 0
+  if (base64.endsWith("==")) padding = 2
+  else if (base64.endsWith("=")) padding = 1
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding)
+}
+
+function normalizeMessageParts(msg: Message): Message {
+  if (!Array.isArray(msg.content)) return msg
+  if (msg.content.some((part) => part.type === "image_url")) return msg
+  return {
+    ...msg,
+    content: msg.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("\n\n"),
+  }
+}
+
+function stripOversizedImages(
+  messages: Array<Message>,
+  maxImageBytes: number,
+): { messages: Array<Message>; stripped: number } {
+  let stripped = 0
+  const next = messages.map((msg) => {
+    if (!Array.isArray(msg.content)) return msg
+    const before = stripped
+    const content = msg.content.map((part) => {
+      if (part.type !== "image_url") return part
+      const size = decodedDataUrlBytes(part.image_url.url)
+      if (size === undefined || size <= maxImageBytes) return part
+      stripped++
+      return {
+        type: "text" as const,
+        text: `[image omitted: exceeds Copilot's ${formatBytes(maxImageBytes)} image limit]`,
+      }
+    })
+    return stripped > before ? normalizeMessageParts({ ...msg, content }) : msg
+  })
+  return { messages: next, stripped }
+}
+
+function stripExcessOldImages(
+  messages: Array<Message>,
+  maxImages: number,
+): { messages: Array<Message>; stripped: number } {
+  let totalImages = 0
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue
+    for (const part of msg.content) {
+      if (part.type === "image_url") totalImages++
+    }
+  }
+  let toStrip = totalImages - maxImages
+  if (toStrip <= 0) return { messages, stripped: 0 }
+
+  let stripped = 0
+  const next = messages.map((msg) => {
+    if (toStrip <= 0 || !Array.isArray(msg.content)) return msg
+    const before = stripped
+    const content = msg.content.map((part) => {
+      if (toStrip <= 0 || part.type !== "image_url") return part
+      toStrip--
+      stripped++
+      return { type: "text" as const, text: IMAGE_LIMIT_PLACEHOLDER }
+    })
+    return stripped > before ? normalizeMessageParts({ ...msg, content }) : msg
+  })
+  return { messages: next, stripped }
+}
+
+/**
+ * Enforce Copilot's advertised per-request vision limits (`max_prompt_images`
+ * and `max_prompt_image_size`) so long multimodal sessions keep the newest
+ * images instead of failing upstream with HTTP 400 `too many images`.
+ */
+export function enforceVisionImageLimits(
+  payload: ChatCompletionsPayload,
+  model: Model,
+): ChatCompletionsPayload {
+  const vision = model.capabilities.limits.vision
+  const maxImages = vision?.max_prompt_images
+  const maxImageBytes = vision?.max_prompt_image_size
+  const hasLimit =
+    (maxImages !== undefined && maxImages > 0)
+    || (maxImageBytes !== undefined && maxImageBytes > 0)
+  if (!hasLimit) return payload
+
+  const hasImage = payload.messages.some(
+    (msg) =>
+      Array.isArray(msg.content)
+      && msg.content.some((part) => part.type === "image_url"),
+  )
+  if (!hasImage) return payload
+
+  let messages = payload.messages
+  let oversized = 0
+  let excess = 0
+  if (maxImageBytes !== undefined && maxImageBytes > 0) {
+    const result = stripOversizedImages(messages, maxImageBytes)
+    messages = result.messages
+    oversized = result.stripped
+  }
+  if (maxImages !== undefined && maxImages > 0) {
+    const result = stripExcessOldImages(messages, maxImages)
+    messages = result.messages
+    excess = result.stripped
+  }
+  if (oversized === 0 && excess === 0) return payload
+
+  consola.warn(
+    `Vision limits (${model.id}): omitted ${excess} oldest and ${oversized} oversized image(s) to stay within Copilot limits`,
+  )
+  return { ...payload, messages }
+}
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -131,8 +252,9 @@ export function fitContext(
   payload: ChatCompletionsPayload,
   model: Model,
 ): ChatCompletionsPayload {
+  const boundedVision = enforceVisionImageLimits(payload, model)
   const ceiling = computeEffectiveCeiling(model)
-  return fitPayloadToCeiling(payload, ceiling)
+  return fitPayloadToCeiling(boundedVision, ceiling)
 }
 
 export function fitUnknownModelContext(

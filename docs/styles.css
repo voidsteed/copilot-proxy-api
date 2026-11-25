@@ -293,7 +293,7 @@ button,
 
 .protocol-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .protocol-grid > div {
@@ -693,12 +693,17 @@ button,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .protocol-grid > div:nth-child(3) {
+  .protocol-grid > div:nth-child(n + 3) {
     border-top: 1px solid var(--line);
   }
 
-  .protocol-grid > div:nth-child(4) {
-    border-top: 1px solid var(--line);
+  .protocol-grid > div:nth-child(even) {
+    border-right: 1px solid var(--line);
+  }
+
+  .protocol-grid > div:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+    border-right: 1px solid var(--line);
   }
 
   .quick-start-grid {

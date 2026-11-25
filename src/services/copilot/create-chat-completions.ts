@@ -13,6 +13,7 @@ import { state } from "~/lib/state"
 /* eslint-disable complexity */
 export const createChatCompletions = async (
   payload: ChatCompletionsPayload,
+  signal?: AbortSignal,
 ) => {
   if (!state.copilotToken) throw new Error("Copilot token not found")
 
@@ -45,6 +46,7 @@ export const createChatCompletions = async (
       method: "POST",
       headers,
       body,
+      signal,
     })
   } catch (error) {
     if (isLikelyContextOverflowTimeout(error, body.length)) {
@@ -55,10 +57,10 @@ export const createChatCompletions = async (
 
   if (!response.ok) {
     const errorBody = await response.text()
+    const errorCode = extractSafeErrorCode(errorBody)
     consola.error(
-      `Failed to create chat completions - Status: ${response.status} ${response.statusText}`,
+      `Failed to create chat completions - Status: ${response.status} ${response.statusText}${errorCode ? ` (${errorCode})` : ""}`,
     )
-    consola.error(`Response body: ${errorBody}`)
     consola.error(`Request payload size: ${body.length} bytes`)
 
     // Detect context overflow errors. Includes:
@@ -108,10 +110,75 @@ export const createChatCompletions = async (
   }
 
   if (payload.stream) {
-    return events(response)
+    return signal ? cancellableEvents(response, signal) : events(response)
   }
 
   return (await response.json()) as ChatCompletionResponse
+}
+
+function cancellableEvents(response: Response, signal: AbortSignal) {
+  const reader = response.body?.getReader()
+  if (!reader) return events(response, signal)
+
+  let cleanup: Promise<void> | undefined
+  const cancel = () => {
+    cleanup ??= (async () => {
+      signal.removeEventListener("abort", abort)
+      try {
+        await reader.cancel(signal.reason)
+      } finally {
+        reader.releaseLock()
+      }
+    })()
+    return cleanup
+  }
+  const abort = () => {
+    void cancel().catch(() => undefined)
+  }
+  signal.addEventListener("abort", abort, { once: true })
+  if (signal.aborted) abort()
+
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read()
+        if (result.done) {
+          controller.close()
+          return
+        }
+        const chunk: unknown = result.value
+        if (!(chunk instanceof Uint8Array))
+          throw new TypeError("Invalid upstream response chunk")
+        controller.enqueue(chunk)
+      } catch (error) {
+        controller.error(error)
+      }
+    },
+    cancel,
+  })
+
+  const iterator = (async function* () {
+    try {
+      for await (const event of events(new Response(body), signal)) {
+        signal.throwIfAborted()
+        yield event
+      }
+      signal.throwIfAborted()
+    } finally {
+      await cancel()
+    }
+  })()
+  const returnIterator = iterator.return.bind(iterator)
+  const throwIterator = iterator.throw.bind(iterator)
+  iterator.return = async (value) => {
+    await cancel()
+    return returnIterator(value)
+  }
+  iterator.throw = async (error: unknown) => {
+    await cancel()
+    return throwIterator(error)
+  }
+  return iterator
 }
 
 // Streaming types
@@ -225,6 +292,20 @@ export interface ChatCompletionsPayload {
     | { type: "function"; function: { name: string } }
     | null
   user?: string | null
+}
+
+const SAFE_ERROR_CODE = /^[\w.-]{1,128}$/
+
+function extractSafeErrorCode(errorBody: string): string | undefined {
+  try {
+    const parsed = JSON.parse(errorBody) as { error?: { code?: unknown } }
+    const code = parsed.error?.code
+    return typeof code === "string" && SAFE_ERROR_CODE.test(code) ?
+        code
+      : undefined
+  } catch {
+    return undefined
+  }
 }
 
 const MAX_COMPLETION_TOKENS_MODEL_PATTERN =

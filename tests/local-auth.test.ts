@@ -9,6 +9,12 @@ function createProtectedApp(): Hono {
   app.use(optionalLocalAuth)
   app.get("/protected", (c) => c.json({ ok: true }))
   app.post("/protected", (c) => c.json({ ok: true }))
+  app.get("/v1/models", (c) => c.json({ object: "list", data: [] }))
+  app.get("/v1/models/:id/codex-config", (c) => c.text('model = "gpt-5"\n'))
+  app.get("/v1/models/:model", (c) => c.json({ name: "models/gemini-4-neon" }))
+  app.post("/v1/models/:action", (c) => c.json({ ok: true }))
+  app.get("/v1beta/models", (c) => c.json({ models: [] }))
+  app.post("/v1beta/models/:action", (c) => c.json({ ok: true }))
   return app
 }
 
@@ -80,6 +86,58 @@ describe("optionalLocalAuth", () => {
     })
 
     expect(response.status).toBe(200)
+  })
+
+  test("authenticates Gemini v1 and v1beta requests with x-goog-api-key without exposing OpenAI or Codex routes", async () => {
+    state.localApiKeys = ["secret"]
+    const app = createProtectedApp()
+    const headers = { "x-goog-api-key": "secret" }
+
+    expect((await app.request("/v1beta/models", { headers })).status).toBe(200)
+    expect((await app.request("/v1/models", { headers })).status).toBe(200)
+    expect(
+      (await app.request("/v1/models/gemini-4-neon", { headers })).status,
+    ).toBe(200)
+    expect(
+      (
+        await app.request("/v1/models/gemini-4-neon:generateContent", {
+          method: "POST",
+          headers,
+        })
+      ).status,
+    ).toBe(200)
+    expect(
+      (await app.request("/v1/models/gpt-5/codex-config", { headers })).status,
+    ).toBe(401)
+    expect((await app.request("/protected", { headers })).status).toBe(401)
+
+    const openAiUnauth = await app.request("/v1/models")
+    expect(openAiUnauth.status).toBe(401)
+    expect(await openAiUnauth.json()).toEqual({
+      error: {
+        message: "Missing or invalid API key",
+        type: "authentication_error",
+      },
+    })
+  })
+
+  test("rejects a key in the Gemini URL with a Gemini authentication error", async () => {
+    state.localApiKeys = ["secret"]
+    const app = createProtectedApp()
+
+    const response = await app.request(
+      "/v1beta/models/gemini-4-neon:generateContent?key=secret",
+      { method: "POST", headers: { "x-goog-api-key": "wrong" } },
+    )
+
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({
+      error: {
+        code: 401,
+        status: "UNAUTHENTICATED",
+        message: "Missing or invalid API key",
+      },
+    })
   })
 
   test("rejects non-matching credentials", async () => {

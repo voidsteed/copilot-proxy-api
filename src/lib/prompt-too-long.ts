@@ -6,10 +6,28 @@ import { HTTPError } from "./error"
 import { getModelPromptLimit } from "./model-limits"
 import { state } from "./state"
 
+export class PromptTooLongError extends HTTPError {
+  readonly estimatedTokens: number
+  readonly maxOutputTokens: number
+  readonly modelLimit: number
+
+  constructor(options: {
+    estimatedTokens: number
+    maxOutputTokens: number
+    modelLimit: number
+    response: Response
+  }) {
+    super("Prompt too long", options.response)
+    this.estimatedTokens = options.estimatedTokens
+    this.maxOutputTokens = options.maxOutputTokens
+    this.modelLimit = options.modelLimit
+  }
+}
+
 export function createPromptTooLongError(
   payload: ChatCompletionsPayload,
   bodyLength: number,
-): HTTPError {
+): PromptTooLongError {
   const estimatedTokens = Math.ceil(bodyLength / 4)
   const modelCaps = state.models?.data.find((m) => m.id === payload.model)
     ?.capabilities.limits
@@ -21,9 +39,11 @@ export function createPromptTooLongError(
     `Context overflow -> returning 400 prompt-too-long (~${estimatedTokens} + ${maxOutputTokens} > ${modelLimit}) to trigger Claude Code reactive compaction`,
   )
 
-  return new HTTPError(
-    "Prompt too long",
-    new Response(
+  return new PromptTooLongError({
+    estimatedTokens,
+    maxOutputTokens,
+    modelLimit,
+    response: new Response(
       JSON.stringify({
         type: "error",
         error: {
@@ -37,5 +57,5 @@ export function createPromptTooLongError(
         headers: { "content-type": "application/json" },
       },
     ),
-  )
+  })
 }
