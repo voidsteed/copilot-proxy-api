@@ -397,11 +397,7 @@ async function createNativeController(): Promise<DesktopController> {
     )
     return companion
   } catch (error) {
-    try {
-      await companion.dispose()
-    } catch {
-      // Preserve the primary startup error.
-    }
+    await companion.dispose().catch(() => undefined)
     throw error
   }
 }

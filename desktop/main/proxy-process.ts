@@ -90,11 +90,14 @@ function mapFatalErrorKind(
   return code === "runtime" ? "startup" : code
 }
 
-function killChildProcess(child: ChildProcess, signal: NodeJS.Signals): void {
+function trySignalChildProcess(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+): void {
   try {
     child.kill(signal)
   } catch {
-    // Child already exited between check and signal delivery.
+    return
   }
 }
 
@@ -112,7 +115,7 @@ function createTerminationController(options: {
   let killTimer: ReturnType<typeof setTimeout> | undefined
 
   const kill = (signal: NodeJS.Signals) => {
-    if (!options.isExited()) killChildProcess(options.child, signal)
+    if (!options.isExited()) trySignalChildProcess(options.child, signal)
   }
 
   return {

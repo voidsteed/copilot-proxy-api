@@ -465,18 +465,17 @@ async function startOwnedGateway(
   }
   return { kind: "retry" }
 }
-function restoreOwnedRuntime(
+function preserveOwnedGatewayAtRevision(
   context: ControllerContext,
   previous: OwnedGateway,
-  expectedRevision: number,
+  currentRevision: number,
 ): void {
   if (
     context.session.owned !== previous
-    || context.session.configurationRevision !== expectedRevision
+    || context.session.configurationRevision !== currentRevision
   )
     return
-  // Keep configurationRevision strictly monotonic by advancing the preserved gateway.
-  previous.revision = expectedRevision
+  previous.revision = currentRevision
   context.session.runtime = previous.runtime
 }
 async function removeObsoleteGateway(
@@ -490,7 +489,7 @@ async function removeObsoleteGateway(
     && context.state.account.kind === "signed-in"
   ) {
     if (await drainOwnedGateway(context, previous)) return true
-    restoreOwnedRuntime(context, previous, revision)
+    preserveOwnedGatewayAtRevision(context, previous, revision)
     context.notice(
       "The gateway is still serving an agent request. Its running configuration was preserved. Try again after the request finishes.",
     )
@@ -708,13 +707,10 @@ export function applyRuntime(
       runtimeSaved = true
     }
     if (!(await drainReplacement(context))) {
-      if (runtimeSaved) {
-        try {
-          await context.settingsStore.save(previous, previousRuntime)
-        } catch {
-          // Keep the preserved runtime result even if rollback fails.
-        }
-      }
+      if (runtimeSaved)
+        await context.settingsStore
+          .save(previous, previousRuntime)
+          .catch(() => undefined)
       return { kind: "preserved" }
     }
     if (isDisposed(context)) return { kind: "applied", createdGateway: null }

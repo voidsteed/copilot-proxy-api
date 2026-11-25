@@ -679,8 +679,6 @@ function subscribeClient(
     hasInitialError: false,
     initialError: undefined,
   }
-  // Capture synchronous initial-snapshot throws so subscribe() still
-  // returns its cleanup function and never leaks the listener.
   const forward = (snapshot: ServiceSnapshot) => {
     if (state.subscribing) {
       state.emittedInitial = true
