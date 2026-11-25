@@ -12,4 +12,9 @@ node_modules/
 
 # build output
 dist/
+/node_modules
+/dist
+/desktop/node_modules
+/desktop/dist
+/desktop/release
 .gstack/

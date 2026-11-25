@@ -36,7 +36,7 @@ server.route("/embeddings", embeddingRoutes)
 server.route("/usage", usageRoute)
 server.route("/token", tokenRoute)
 
-const v1ModelRoutes = new Hono()
+export const v1ModelRoutes = new Hono()
 v1ModelRoutes.get("/", (c, next) => {
   if (
     c.req.header("x-goog-api-key") !== undefined
