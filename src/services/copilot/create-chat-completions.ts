@@ -110,22 +110,22 @@ export const createChatCompletions = async (
   }
 
   if (payload.stream) {
-    return signal ? cancellableEvents(response, signal) : events(response)
+    return cancellableEvents(response, signal)
   }
 
   return (await response.json()) as ChatCompletionResponse
 }
 
-function cancellableEvents(response: Response, signal: AbortSignal) {
+function cancellableEvents(response: Response, signal?: AbortSignal) {
   const reader = response.body?.getReader()
   if (!reader) return events(response, signal)
 
   let cleanup: Promise<void> | undefined
   const cancel = () => {
     cleanup ??= (async () => {
-      signal.removeEventListener("abort", abort)
+      signal?.removeEventListener("abort", abort)
       try {
-        await reader.cancel(signal.reason)
+        await reader.cancel(signal?.reason)
       } finally {
         reader.releaseLock()
       }
@@ -135,8 +135,8 @@ function cancellableEvents(response: Response, signal: AbortSignal) {
   const abort = () => {
     void cancel().catch(() => undefined)
   }
-  signal.addEventListener("abort", abort, { once: true })
-  if (signal.aborted) abort()
+  signal?.addEventListener("abort", abort, { once: true })
+  if (signal?.aborted) abort()
 
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -160,10 +160,10 @@ function cancellableEvents(response: Response, signal: AbortSignal) {
   const iterator = (async function* () {
     try {
       for await (const event of events(new Response(body), signal)) {
-        signal.throwIfAborted()
+        signal?.throwIfAborted()
         yield event
       }
-      signal.throwIfAborted()
+      signal?.throwIfAborted()
     } finally {
       await cancel()
     }
