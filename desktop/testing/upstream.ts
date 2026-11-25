@@ -98,6 +98,7 @@ function fixtureModel(
     reasoning?: boolean
     preview?: boolean
     endpoints?: Array<string>
+    policy?: { state: string; terms: string }
   },
 ): Model {
   return {
@@ -108,6 +109,7 @@ function fixtureModel(
     version: "fixture-1",
     model_picker_enabled: true,
     preview: options.preview ?? false,
+    ...(options.policy ? { policy: options.policy } : {}),
     supported_endpoints: options.endpoints ?? [
       "/chat/completions",
       "/responses",
@@ -187,6 +189,15 @@ const catalog: ModelsResponse = {
       tools: true,
       vision: true,
       preview: true,
+    }),
+    fixtureModel("gemini-2.5-pro", "Gemini 2.5 Pro", {
+      vendor: "Google",
+      context: 1_000_000,
+      output: 65_536,
+      tools: true,
+      vision: true,
+      endpoints: ["/chat/completions"],
+      policy: { state: "enabled", terms: "" },
     }),
   ],
 }

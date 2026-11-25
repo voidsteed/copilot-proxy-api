@@ -319,6 +319,9 @@ test("commandKey separates distinct sibling agent and copy commands", () => {
     }),
   )
   expect(commandKey({ kind: "refresh" })).toBe(commandKey({ kind: "refresh" }))
+  expect(
+    commandKey({ kind: "inspect-launch-agent", target: "antigravity" }),
+  ).toBe("inspect-launch-agent:antigravity")
 })
 
 test("errorMessage formats ZodErrors and strips Electron IPC prefixes cleanly", () => {
@@ -566,4 +569,88 @@ test("ModelsView empty-state refresh button tracks refresh pending state and Age
     <AgentsView {...props(embeddingsOnly)} />,
   )
   expect(agentsHtml).toContain("Chat Completions or the Responses API")
+})
+
+test("AgentsView renders Antigravity CLI non-destructively with masked preview and read-only diagnostics", () => {
+  const connection = publicConnectionSchema.parse({
+    rootUrl: "http://127.0.0.1:4141/",
+    apiUrl: "http://127.0.0.1:4141/v1",
+    authentication: { kind: "keyed" },
+  })
+  const running = {
+    kind: "running" as const,
+    url: "http://127.0.0.1:4141/v1",
+    startedAt: checkedAt,
+  }
+  const googleModel: DesktopModel = {
+    id: "gemini-2.5-pro",
+    name: "Gemini 2.5 Pro",
+    vendor: "Google",
+    type: "chat",
+    contextWindow: 1_000_000,
+    maxOutput: 65_536,
+    supports: ["streaming", "tools"],
+    endpoints: ["/chat/completions"],
+    preview: false,
+  }
+  const openaiModel: DesktopModel = {
+    id: "gpt-5",
+    name: "GPT-5",
+    vendor: "OpenAI",
+    type: "chat",
+    contextWindow: 200_000,
+    maxOutput: 16_000,
+    supports: ["tools"],
+    endpoints: ["/responses"],
+    preview: false,
+  }
+  const snapshot = fixture({
+    gateway: running,
+    connection,
+    models: [openaiModel, googleModel],
+    launchAgentDiagnostics: [
+      {
+        kind: "warning",
+        target: "antigravity",
+        path: "/Users/test/.gemini/antigravity-cli/settings.json",
+        code: "persistent-gemini-provider",
+        message:
+          "settings.json sets modelProvider to gemini. Bare agy requires GEMINI_API_KEY in the shell; the session launch command below still works without changing your file.",
+      },
+    ],
+  })
+
+  const html = renderToStaticMarkup(
+    <AgentsView {...props(snapshot)} initialTarget="antigravity" />,
+  )
+  expect(html).toContain("Antigravity CLI")
+  expect(html).toContain("Gemini API")
+  expect(html).toContain("Proxy base URL")
+  expect(html).toContain('value="http://127.0.0.1:4141"')
+  expect(html).toContain("Gemini 2.5 Pro")
+  expect(html).not.toContain("GPT-5")
+  expect(html).not.toContain('data-testid="configure-agent"')
+  expect(html).not.toContain('data-testid="open-config-folder"')
+  expect(html).toContain('data-testid="inspect-launch-agent"')
+  expect(html).toContain('data-testid="copy-config"')
+  expect(html).toContain("GOOGLE_GEMINI_BASE_URL")
+  expect(html).toContain("&lt;LOCAL_API_KEY&gt;")
+  expect(html).toContain("Check settings")
+  expect(html).toContain('role="alert"')
+  expect(html).toContain("modelProvider to gemini")
+
+  const noGoogleHtml = renderToStaticMarkup(
+    <AgentsView
+      {...props(
+        fixture({ gateway: running, connection, models: [openaiModel] }),
+      )}
+      initialTarget="antigravity"
+    />,
+  )
+  expect(noGoogleHtml).toContain(
+    "Antigravity CLI requires a Google chat model exposed through GitHub Copilot.",
+  )
+  expect(renderToStaticMarkup(<OverviewView {...props(snapshot)} />)).toContain(
+    "Claude Code, Codex, OpenCode, Antigravity CLI",
+  )
 })

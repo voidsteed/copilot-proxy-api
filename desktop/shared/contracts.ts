@@ -10,7 +10,10 @@ import {
   authorizationSchema,
   configurableAgentSchema,
   configureResultSchema,
+  launchAgentDiagnosticsSchema,
+  launchAgentSchema,
   modelSchema,
+  modelSelectableAgentSchema,
   proxySourceSchema,
   publicConnectionSchema,
   runtimeOptionsSchema,
@@ -26,7 +29,11 @@ export {
   authorizationSchema,
   configurableAgentSchema,
   configureResultSchema,
+  isGoogleChatModel,
+  launchAgentDiagnosticsSchema,
+  launchAgentSchema,
   modelSchema,
+  modelSelectableAgentSchema,
   proxySourceSchema,
   publicConnectionSchema,
   runtimeOptionsSchema,
@@ -41,6 +48,9 @@ export type {
   AgentTarget,
   ConfigurableAgent,
   ConfigureResult,
+  LaunchAgentDiagnostics,
+  LaunchConfiguredAgent,
+  ModelSelectableAgent,
   ProxySource,
   PublicConnection,
 } from "../../src/lib/proxy-contracts"
@@ -56,11 +66,9 @@ export const settingsSchema = z
     closeToTray: z.boolean().default(true),
     theme: z.enum(["system", "light", "dark"]).default("system"),
     preferredModel: z.string().max(200).default(""),
-    agentModelChoices: agentModelChoicesSchema.default({
-      "claude-code": null,
-      codex: null,
-      opencode: null,
-    }),
+    agentModelChoices: agentModelChoicesSchema.default(() =>
+      agentModelChoicesSchema.parse({}),
+    ),
     shell: z.enum(["posix", "powershell"]).default("posix"),
   })
   .strict()
@@ -70,6 +78,7 @@ const agentModelChoicesPatchSchema = z
     "claude-code": z.string().max(200).nullable().optional(),
     codex: z.string().max(200).nullable().optional(),
     opencode: z.string().max(200).nullable().optional(),
+    antigravity: z.string().max(200).nullable().optional(),
   })
   .strict()
 
@@ -155,6 +164,7 @@ export const snapshotSchema = z.object({
   runtime: runtimeOptionsSchema.nullable().default(null),
   settings: settingsSchema,
   agentConfigs: z.array(agentConfigViewSchema).default([]),
+  launchAgentDiagnostics: z.array(launchAgentDiagnosticsSchema).default([]),
   lastConfigureResult: configureResultSchema.nullable().default(null),
   models: z.array(modelSchema),
   modelsFetchedAt: z.string().nullable(),
@@ -200,7 +210,7 @@ export const commandSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("select-agent-model"),
-      target: configurableAgentSchema,
+      target: modelSelectableAgentSchema,
       modelId: z.string().min(1).max(200),
     })
     .strict(),
@@ -208,6 +218,12 @@ export const commandSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("inspect-agent-config"),
       target: configurableAgentSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("inspect-launch-agent"),
+      target: launchAgentSchema,
     })
     .strict(),
   z

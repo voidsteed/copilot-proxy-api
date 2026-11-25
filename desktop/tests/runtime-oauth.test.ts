@@ -491,6 +491,89 @@ describe("probe response parsing", () => {
     })
     expect(chatProbe.text).toBe("Answer from choices")
   })
+
+  test("routes Google chat models to /v1beta/models/:generateContent with x-goog-api-key and skips thought parts", async () => {
+    const requests: Array<{
+      url: string
+      googleKey: string | undefined
+      authorization: string | undefined
+      body: unknown
+    }> = []
+    let thoughtOnly = false
+    const server = createServer((request, response) => {
+      const chunks: Array<Buffer> = []
+      request.on("data", (chunk: Buffer) => chunks.push(chunk))
+      request.on("end", () => {
+        requests.push({
+          url: request.url ?? "",
+          googleKey: request.headers["x-goog-api-key"] as string | undefined,
+          authorization: request.headers.authorization,
+          body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+        })
+        response.writeHead(200, { "content-type": "application/json" })
+        const parts =
+          thoughtOnly ?
+            [{ text: "internal reasoning", thought: true }]
+          : [
+              { text: "internal reasoning", thought: true },
+              { text: null, thought: false },
+              { text: "  Hello from " },
+              { text: "Gemini!  " },
+            ]
+        response.end(JSON.stringify({ candidates: [{ content: { parts } }] }))
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    cleanups.push(
+      () => new Promise<void>((resolve) => server.close(() => resolve())),
+    )
+    const address = server.address()
+    if (!address || typeof address === "string")
+      throw new Error("No Gemini probe fixture port")
+    const keyedConnection = nativeConnectionSchema.parse({
+      rootUrl: `http://127.0.0.1:${address.port}/`,
+      apiUrl: `http://127.0.0.1:${address.port}/v1`,
+      authentication: { kind: "keyed", key: gatewayKey },
+    })
+    const googleModel: DesktopModel = {
+      id: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+      vendor: "Google",
+      type: "chat",
+      contextWindow: 1_000_000,
+      maxOutput: 65_536,
+      supports: ["streaming", "tools"],
+      endpoints: ["/chat/completions"],
+      preview: false,
+    }
+    const result = await executeProbe({
+      connection: keyedConnection,
+      model: googleModel,
+      prompt: "Ping Gemini",
+      signal: new AbortController().signal,
+    })
+    expect(result.text).toBe("Hello from Gemini!")
+    expect(requests).toEqual([
+      {
+        url: "/v1beta/models/gemini-2.5-pro:generateContent",
+        googleKey: gatewayKey,
+        authorization: undefined,
+        body: {
+          contents: [{ role: "user", parts: [{ text: "Ping Gemini" }] }],
+          generationConfig: { maxOutputTokens: 128 },
+        },
+      },
+    ])
+    thoughtOnly = true
+    await expectRejection(
+      executeProbe({
+        connection: keyedConnection,
+        model: googleModel,
+        prompt: "Ping Gemini",
+        signal: new AbortController().signal,
+      }),
+    )
+  })
 })
 
 describe("sign-in failure messages", () => {

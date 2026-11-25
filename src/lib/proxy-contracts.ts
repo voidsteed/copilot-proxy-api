@@ -4,12 +4,28 @@ export const agentTargetSchema = z.enum([
   "claude-code",
   "codex",
   "opencode",
+  "antigravity",
   "curl",
 ])
 export type AgentTarget = z.infer<typeof agentTargetSchema>
 
-export const configurableAgentSchema = agentTargetSchema.exclude(["curl"])
+export const configurableAgentSchema = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+])
 export type ConfigurableAgent = z.infer<typeof configurableAgentSchema>
+
+export const launchAgentSchema = z.enum(["antigravity"])
+export type LaunchConfiguredAgent = z.infer<typeof launchAgentSchema>
+
+export const modelSelectableAgentSchema = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "antigravity",
+])
+export type ModelSelectableAgent = z.infer<typeof modelSelectableAgentSchema>
 
 function parsedUrl(value: string): URL | null {
   return URL.canParse(value) ? new URL(value) : null
@@ -113,9 +129,55 @@ export const agentModelChoicesSchema = z
     "claude-code": z.string().max(200).nullable().default(null),
     codex: z.string().max(200).nullable().default(null),
     opencode: z.string().max(200).nullable().default(null),
+    antigravity: z.string().max(200).nullable().default(null),
   })
   .strict()
 export type AgentModelChoices = z.infer<typeof agentModelChoicesSchema>
+
+export const launchAgentDiagnosticsSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("absent"),
+      target: launchAgentSchema,
+      path: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("compatible"),
+      target: launchAgentSchema,
+      path: z.string(),
+      existingModelProvider: z.string().nullable(),
+      existingModel: z.string().nullable(),
+      summary: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("warning"),
+      target: launchAgentSchema,
+      path: z.string(),
+      code: z.enum([
+        "persistent-gemini-provider",
+        "non-object-root",
+        "invalid-provider-type",
+        "duplicate-keys",
+      ]),
+      message: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("invalid-file"),
+      target: launchAgentSchema,
+      path: z.string(),
+      message: z.string(),
+    })
+    .strict(),
+])
+export type LaunchAgentDiagnostics = z.infer<
+  typeof launchAgentDiagnosticsSchema
+>
 
 export const agentConfigViewSchema = z
   .object({
@@ -173,6 +235,17 @@ export const modelSchema = z.object({
   preview: z.boolean(),
 })
 export type CatalogModel = z.infer<typeof modelSchema>
+
+export function isGoogleChatModel(
+  model: Pick<CatalogModel, "vendor" | "type" | "endpoints">,
+): boolean {
+  return (
+    model.vendor.toLowerCase() === "google"
+    && (model.type ?? "chat") === "chat"
+    && (model.endpoints.length === 0
+      || model.endpoints.includes("/chat/completions"))
+  )
+}
 
 export const quotaSchema = z.discriminatedUnion("kind", [
   z.object({

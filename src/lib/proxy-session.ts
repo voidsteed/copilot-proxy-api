@@ -17,6 +17,7 @@ import type {
 import { inspectAgentConfigs } from "./agent-config"
 import { discoverLegacySession, legacyIntentCompatible } from "./legacy-proxy"
 import {
+  agentModelChoicesSchema,
   nativeCredentialProvenanceSchema,
   nativeIntentSchema,
   runtimeOptionsSchema,
@@ -169,7 +170,7 @@ export async function cliProxyOptions(
         homeDirectory,
         connection: null,
         catalog: [],
-        proposals: { "claude-code": null, codex: null, opencode: null },
+        proposals: agentModelChoicesSchema.parse({}),
       }),
       savedRuntime: runtimeOptionsSchema.parse({
         port: 4141,

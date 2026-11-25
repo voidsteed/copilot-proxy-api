@@ -5,6 +5,7 @@ import type {
   AgentModel,
   ConfigurableAgent,
   ControlResult,
+  ModelSelectableAgent,
   NativeConnection,
   NativeIntent,
   NativeSessionAuthority,
@@ -21,11 +22,10 @@ import type { ControllerOptions, DesktopController } from "./types"
 import {
   configureMissingAgent,
   getAgentConfigFolder,
-  inspectAgentConfigs,
 } from "../../src/lib/agent-config"
+import { inspectLaunchAgents } from "../../src/lib/launch-agent-diagnostics"
 import {
   nativeIntentSchema,
-  runtimeOptionsSchema,
   sessionIdSchema,
 } from "../../src/lib/proxy-contracts"
 import { fixtureOriginSchema } from "../engine/upstream"
@@ -67,18 +67,21 @@ import {
   createSettingsStore,
   mergeSettingsPatch,
   persistSettings,
-  pickProvidedSettingsPatch,
 } from "./settings-store"
 import {
   createNativeSnapshot,
   createNativeSource,
+  defaultRuntimeOptions,
   initialSnapshot,
+  inspectAllAgents,
   proposeAgentModel,
   runGatewayProbe,
+  shouldClearConfigureResult,
 } from "./snapshot"
 
 const PASSIVE_COMMANDS = new Set<DesktopCommand["kind"]>([
   "inspect-agent-config",
+  "inspect-launch-agent",
   "open-config-folder",
   "clear-probe",
 ])
@@ -125,16 +128,7 @@ class Controller implements DesktopController {
       }),
       account: createControllerAccountState(),
       session: createControllerSessionState(
-        loaded.runtime?.options
-          ?? runtimeOptionsSchema.parse({
-            port: loaded.settings.port,
-            accountType: loaded.settings.accountType,
-            manualApprove: false,
-            rateLimitSeconds: null,
-            rateLimitWait: false,
-            responsesContextTrim: false,
-            proxyFromEnvironment: false,
-          }),
+        loaded.runtime?.options ?? defaultRuntimeOptions(loaded.settings),
       ),
       publish: (patch) => this.publish(patch),
       notice: (message, kind) => this.notice(message, kind),
@@ -151,6 +145,7 @@ class Controller implements DesktopController {
     await restore(this.context)
   }
   private configInspection = 0
+  private launchInspection = 0
   private disposal: Promise<void> | undefined
   private readonly background = new Set<Promise<void>>()
   private readonly listeners = new Set<(snapshot: DesktopSnapshot) => void>()
@@ -171,7 +166,7 @@ class Controller implements DesktopController {
       : null
   }
   agentProposal = (
-    target: ConfigurableAgent,
+    target: ModelSelectableAgent,
   ): Extract<AgentModel, { kind: "proposed" }> | null =>
     proposeAgentModel(this.context.state, target)
   private nativeSource(): Extract<
@@ -199,7 +194,12 @@ class Controller implements DesktopController {
       : this.dispatchNative(intent),
     subscribe: (listener) => {
       this.serviceListeners.add(listener)
-      listener(this.serviceSnapshot())
+      try {
+        listener(this.serviceSnapshot())
+      } catch (error) {
+        this.serviceListeners.delete(listener)
+        throw error
+      }
       return () => this.serviceListeners.delete(listener)
     },
   })
@@ -245,36 +245,37 @@ class Controller implements DesktopController {
     clearStaleTarget?: ConfigurableAgent
   }): Promise<void> {
     const inspection = ++this.configInspection
-    const views = await inspectAgentConfigs({
+    const launchId = ++this.launchInspection
+    const { agentConfigs, launchAgentDiagnostics } = await inspectAllAgents({
       homeDirectory: this.context.homeDirectory,
       connection: this.activeConnection(),
-      catalog: this.context.state.models,
-      proposals: {
-        "claude-code": this.agentProposal("claude-code")?.catalogId ?? null,
-        codex: this.agentProposal("codex")?.catalogId ?? null,
-        opencode: this.agentProposal("opencode")?.catalogId ?? null,
-      },
+      state: this.context.state,
     })
     if (
       !this.context.session.disposed
       && inspection === this.configInspection
     ) {
-      const prior = this.context.state.lastConfigureResult
-      const clearTarget = options?.clearStaleTarget
-      const latest =
-        clearTarget ?
-          views.find((view) => view.target === clearTarget)
-        : undefined
-      const clearResult =
-        clearTarget !== undefined
-        && prior !== null
-        && prior.view.target === clearTarget
-        && (!latest || latest.status !== prior.view.status)
+      const clearResult = shouldClearConfigureResult({
+        prior: this.context.state.lastConfigureResult,
+        views: agentConfigs,
+        clearStaleTarget: options?.clearStaleTarget,
+      })
       this.publish({
-        agentConfigs: views,
+        agentConfigs,
+        ...(launchId === this.launchInspection ?
+          { launchAgentDiagnostics }
+        : {}),
         ...(clearResult ? { lastConfigureResult: null } : {}),
       })
     }
+  }
+  private async inspectLaunchDiagnostics(): Promise<void> {
+    const launchId = ++this.launchInspection
+    const launchAgentDiagnostics = await inspectLaunchAgents(
+      this.context.homeDirectory,
+    )
+    if (!this.context.session.disposed && launchId === this.launchInspection)
+      this.publish({ launchAgentDiagnostics })
   }
   private persistedSettings(settings: DesktopSettings): DesktopSettings {
     if (!this.context.session.legacy) return settings
@@ -368,14 +369,7 @@ class Controller implements DesktopController {
         outcome: this.reject("The app received an invalid command."),
         snapshot: this.snapshot(),
       }
-    // Preserve only caller-provided fields because settingsPatchSchema wraps fields with Zod defaults.
-    const command: DesktopCommand =
-      parsed.data.kind === "save-settings" ?
-        {
-          kind: "save-settings",
-          settings: pickProvidedSettingsPatch(input, parsed.data.settings),
-        }
-      : parsed.data
+    const command = parsed.data
     if (!PASSIVE_COMMANDS.has(command.kind)) this.publish({ notice: null })
     let outcome: CommandOutcome
     try {
@@ -405,6 +399,7 @@ class Controller implements DesktopController {
       case "select-model":
       case "select-agent-model":
       case "inspect-agent-config":
+      case "inspect-launch-agent":
       case "open-config-folder":
       case "configure-agent": {
         return this.handleConfigurationCommand(command)
@@ -516,6 +511,7 @@ class Controller implements DesktopController {
           | "select-model"
           | "select-agent-model"
           | "inspect-agent-config"
+          | "inspect-launch-agent"
           | "open-config-folder"
           | "configure-agent"
       }
@@ -553,6 +549,10 @@ class Controller implements DesktopController {
       }
       case "inspect-agent-config": {
         await this.inspectConfigs({ clearStaleTarget: command.target })
+        return { kind: "ok" }
+      }
+      case "inspect-launch-agent": {
+        await this.inspectLaunchDiagnostics()
         return { kind: "ok" }
       }
       case "open-config-folder": {

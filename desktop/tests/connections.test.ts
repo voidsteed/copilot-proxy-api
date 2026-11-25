@@ -9,8 +9,18 @@ import type {
   DesktopModel,
 } from "../shared/contracts"
 
-import { nativeConnectionSchema } from "../../src/lib/proxy-contracts"
-import { createConnectionSnippet, supportsAgent } from "../shared/connections"
+import {
+  isGoogleChatModel,
+  nativeConnectionSchema,
+  publicConnectionSchema,
+} from "../../src/lib/proxy-contracts"
+import {
+  connectionOrigin,
+  connectionUrlForAgent,
+  createConnectionSnippet,
+  createLaunchPreview,
+  supportsAgent,
+} from "../shared/connections"
 
 const modelId = 'fixture/model\'s $(printf MODEL_INJECTED) "preview"'
 const apiKey = "fixture_key's $(printf KEY_INJECTED) 01234567890123456789"
@@ -61,6 +71,8 @@ ANTHROPIC_MODEL=''
 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=''
 DISABLE_NON_ESSENTIAL_MODEL_CALLS=''
 OPENCODE_CONFIG_CONTENT=''
+GOOGLE_GEMINI_BASE_URL=''
+GEMINI_API_KEY=''
 record() { printf '%s\0' "$@"; }
 claude() {
   record claude "$ANTHROPIC_BASE_URL" "$ANTHROPIC_AUTH_TOKEN" "$ANTHROPIC_MODEL" \
@@ -68,6 +80,7 @@ claude() {
 }
 codex() { record codex "$COPILOT_PROXY_API_KEY" "$@"; }
 opencode() { record opencode "$OPENCODE_CONFIG_CONTENT" "$@"; }
+agy() { record agy "$GOOGLE_GEMINI_BASE_URL" "$GEMINI_API_KEY" "$@"; }
 curl() { record curl "$@"; }
 `
 
@@ -424,4 +437,224 @@ describe.skipIf(!posixShell)("unkeyed proxy snippets", () => {
       modelId,
     )
   })
+
+  test("Antigravity CLI uses root origin without trailing slash and local-proxy fallback when unkeyed", () => {
+    const trailingSlashConnection = nativeConnectionSchema.parse({
+      rootUrl: "http://127.0.0.1:43219/",
+      apiUrl: "http://127.0.0.1:43219/v1",
+      authentication: { kind: "none" },
+    })
+    const googleModel: DesktopModel = {
+      ...model,
+      vendor: "Google",
+      type: "chat",
+      endpoints: ["/chat/completions"],
+    }
+    const source = createConnectionSnippet({
+      target: "antigravity",
+      connection: trailingSlashConnection,
+      shell: "posix",
+      model: googleModel,
+    })
+    expect(executePosix(source)).toEqual([
+      "agy",
+      "http://127.0.0.1:43219",
+      "local-proxy",
+      "--settings",
+      '{"modelProvider":"gemini"}',
+      "--model",
+      modelId,
+    ])
+  })
+})
+
+describe("Antigravity CLI support, preview redaction, and PowerShell quoting", () => {
+  const googleChatModel: DesktopModel = {
+    ...model,
+    vendor: "Google",
+    type: "chat",
+    endpoints: ["/chat/completions"],
+  }
+
+  test("isGoogleChatModel and supportsAgent accept Google chat models and reject others", () => {
+    expect(isGoogleChatModel(googleChatModel)).toBe(true)
+    expect(
+      isGoogleChatModel({
+        vendor: "google",
+        type: undefined,
+        endpoints: [],
+      }),
+    ).toBe(true)
+    expect(supportsAgent(googleChatModel, "antigravity")).toBe(true)
+
+    expect(
+      supportsAgent({ ...googleChatModel, vendor: "OpenAI" }, "antigravity"),
+    ).toBe(false)
+    expect(
+      supportsAgent({ ...googleChatModel, type: "embeddings" }, "antigravity"),
+    ).toBe(false)
+    expect(
+      supportsAgent(
+        { ...googleChatModel, endpoints: ["/responses"] },
+        "antigravity",
+      ),
+    ).toBe(false)
+    expect(() => snippet("antigravity", model)).toThrow("does not support")
+  })
+
+  test("connectionOrigin and connectionUrlForAgent map endpoint kinds consistently", () => {
+    const trailing = publicConnectionSchema.parse({
+      rootUrl: "http://127.0.0.1:4141/",
+      apiUrl: "http://127.0.0.1:4141/v1",
+      authentication: { kind: "keyed" },
+    })
+    expect(connectionOrigin(trailing)).toBe("http://127.0.0.1:4141")
+    expect(connectionUrlForAgent(trailing, "claude-code")).toBe(
+      "http://127.0.0.1:4141/",
+    )
+    expect(connectionUrlForAgent(trailing, "antigravity")).toBe(
+      "http://127.0.0.1:4141",
+    )
+    expect(connectionUrlForAgent(trailing, "codex")).toBe(
+      "http://127.0.0.1:4141/v1",
+    )
+    expect(connectionUrlForAgent(trailing, "opencode")).toBe(
+      "http://127.0.0.1:4141/v1",
+    )
+    expect(connectionUrlForAgent(trailing, "curl")).toBe(
+      "http://127.0.0.1:4141/v1",
+    )
+  })
+
+  test("createLaunchPreview masks keyed authentication and strips trailing slashes", () => {
+    const keyedPublic = publicConnectionSchema.parse({
+      rootUrl: "http://127.0.0.1:4141/",
+      apiUrl: "http://127.0.0.1:4141/v1",
+      authentication: { kind: "keyed" },
+    })
+    const preview = createLaunchPreview({
+      target: "antigravity",
+      connection: keyedPublic,
+      model: googleChatModel,
+      modelId: "gemini-2.5-pro",
+      shell: "posix",
+    })
+    expect(preview).toContain(
+      "export GOOGLE_GEMINI_BASE_URL='http://127.0.0.1:4141'",
+    )
+    expect(preview).toContain("export GEMINI_API_KEY='<LOCAL_API_KEY>'")
+    expect(preview).toContain(
+      `agy --settings '{"modelProvider":"gemini"}' --model 'gemini-2.5-pro'`,
+    )
+    expect(preview).not.toContain(apiKey)
+
+    const unkeyedPublic = publicConnectionSchema.parse({
+      ...keyedPublic,
+      authentication: { kind: "none" },
+    })
+    const unkeyedPreview = createLaunchPreview({
+      target: "antigravity",
+      connection: unkeyedPublic,
+      model: googleChatModel,
+      modelId: "gemini-2.5-pro",
+      shell: "posix",
+    })
+    expect(unkeyedPreview).toContain("export GEMINI_API_KEY='local-proxy'")
+  })
+
+  test.skipIf(!posixShell)(
+    "Antigravity CLI POSIX snippet executes with literal key and model",
+    () => {
+      const keyedTrailing = nativeConnectionSchema.parse({
+        rootUrl: "http://127.0.0.1:43219/",
+        apiUrl: "http://127.0.0.1:43219/v1",
+        authentication: { kind: "keyed", key: apiKey },
+      })
+      const source = createConnectionSnippet({
+        target: "antigravity",
+        connection: keyedTrailing,
+        shell: "posix",
+        model: googleChatModel,
+      })
+      expect(executePosix(source)).toEqual([
+        "agy",
+        "http://127.0.0.1:43219",
+        apiKey,
+        "--settings",
+        '{"modelProvider":"gemini"}',
+        "--model",
+        modelId,
+      ])
+    },
+  )
+
+  test("Antigravity CLI PowerShell snippet emits version-aware settings quoting", () => {
+    const keyedTrailing = nativeConnectionSchema.parse({
+      rootUrl: "http://127.0.0.1:43219/",
+      apiUrl: "http://127.0.0.1:43219/v1",
+      authentication: { kind: "keyed", key: apiKey },
+    })
+    const source = createConnectionSnippet({
+      target: "antigravity",
+      connection: keyedTrailing,
+      shell: "powershell",
+      model: googleChatModel,
+    })
+    expect(source).toContain(
+      "$env:GOOGLE_GEMINI_BASE_URL = 'http://127.0.0.1:43219'",
+    )
+    expect(source).toContain(
+      `$env:GEMINI_API_KEY = '${apiKey.replaceAll("'", "''")}'`,
+    )
+    expect(source).toContain("$PSNativeCommandArgumentPassing -ne 'Legacy'")
+    expect(source).toContain(String.raw`-notmatch '\.(cmd|bat)$'`)
+    expect(source).toContain(
+      `agy --settings $agySettings --model '${modelId.replaceAll("'", "''")}'`,
+    )
+  })
+
+  test.skipIf(!powershell)(
+    "Antigravity CLI PowerShell snippet executes cleanly in pwsh",
+    () => {
+      if (!powershell) throw new Error("PowerShell is unavailable")
+      const keyedTrailing = nativeConnectionSchema.parse({
+        rootUrl: "http://127.0.0.1:43219/",
+        apiUrl: "http://127.0.0.1:43219/v1",
+        authentication: { kind: "keyed", key: apiKey },
+      })
+      const source = createConnectionSnippet({
+        target: "antigravity",
+        connection: keyedTrailing,
+        shell: "powershell",
+        model: googleChatModel,
+      })
+      const stub = `function agy {
+        param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest)
+        $values = @($env:GOOGLE_GEMINI_BASE_URL, $env:GEMINI_API_KEY) + $Rest
+        ConvertTo-Json -Compress -InputObject $values
+      }`
+      const child = spawnSync(
+        powershell,
+        ["-NoProfile", "-NonInteractive", "-Command", `${stub}\n${source}`],
+        {
+          encoding: "utf8",
+          env: { PATH: process.env.PATH },
+          timeout: 15_000,
+        },
+      )
+      expect(child.error).toBeUndefined()
+      expect(child.status).toBe(0)
+      expect(child.stderr).toBe("")
+      const observed: unknown = JSON.parse(child.stdout)
+      expect(observed).toEqual([
+        "http://127.0.0.1:43219",
+        apiKey,
+        "--settings",
+        '{"modelProvider":"gemini"}',
+        "--model",
+        modelId,
+      ])
+    },
+    20_000,
+  )
 })

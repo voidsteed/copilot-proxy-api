@@ -69,6 +69,7 @@ const proposals = {
   "claude-code": "claude-sonnet-5.5",
   codex: "gpt-6.1-sol",
   opencode: "claude-sonnet-5.5",
+  antigravity: null,
 }
 
 let homeDirectory: string
@@ -830,6 +831,7 @@ describe("auth edge cases, stopped-gateway validation, and contract upgrades", (
       "claude-code": null,
       codex: null,
       opencode: null,
+      antigravity: null,
     })
     expect(
       agentModelChoicesSchema.safeParse({ unknown: "gpt-6.1-sol" }).success,

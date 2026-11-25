@@ -4,27 +4,60 @@ import type {
   AgentTarget,
   DesktopModel,
   DesktopSettings,
+  LaunchConfiguredAgent,
   PublicConnection,
 } from "./contracts"
 
-import { agentTargetSchema } from "./contracts"
+import { agentTargetSchema, isGoogleChatModel } from "./contracts"
+
+export type AgentMode = "file-configured" | "launch-configured" | "http"
+export type AgentEndpointKind = "root" | "origin" | "api"
 
 export const AGENT_DETAILS = {
   "claude-code": {
     name: "Claude Code",
     command: "claude",
     protocol: "Anthropic Messages",
+    mode: "file-configured",
+    endpointKind: "root",
   },
-  codex: { name: "Codex", command: "codex", protocol: "OpenAI Responses" },
+  codex: {
+    name: "Codex",
+    command: "codex",
+    protocol: "OpenAI Responses",
+    mode: "file-configured",
+    endpointKind: "api",
+  },
   opencode: {
     name: "OpenCode",
     command: "opencode",
     protocol: "OpenAI Chat Completions",
+    mode: "file-configured",
+    endpointKind: "api",
   },
-  curl: { name: "HTTP", command: "curl", protocol: "OpenAI compatible" },
+  antigravity: {
+    name: "Antigravity CLI",
+    command: "agy",
+    protocol: "Gemini API",
+    mode: "launch-configured",
+    endpointKind: "origin",
+  },
+  curl: {
+    name: "HTTP",
+    command: "curl",
+    protocol: "OpenAI compatible",
+    mode: "http",
+    endpointKind: "api",
+  },
 } satisfies Record<
   AgentTarget,
-  { name: string; command: string; protocol: string }
+  {
+    name: string
+    command: string
+    protocol: string
+    mode: AgentMode
+    endpointKind: AgentEndpointKind
+  }
 >
 
 export const AGENTS = agentTargetSchema.options.map((id) => ({
@@ -32,15 +65,74 @@ export const AGENTS = agentTargetSchema.options.map((id) => ({
   ...AGENT_DETAILS[id],
 }))
 
+export function connectionOrigin(
+  connection: Pick<PublicConnection, "rootUrl">,
+): string {
+  return connection.rootUrl.replace(/\/+$/u, "")
+}
+
+export function connectionUrlForAgent(
+  connection: Pick<PublicConnection, "rootUrl" | "apiUrl">,
+  target: AgentTarget,
+): string {
+  const kind = AGENT_DETAILS[target].endpointKind
+  switch (kind) {
+    case "root": {
+      return connection.rootUrl
+    }
+    case "origin": {
+      return connectionOrigin(connection)
+    }
+    case "api": {
+      return connection.apiUrl
+    }
+    default: {
+      const exhaustive: never = kind
+      return exhaustive
+    }
+  }
+}
+
 export function supportsAgent(
   model: DesktopModel,
   target: AgentTarget,
 ): boolean {
-  if (target === "codex") return model.endpoints.includes("/responses")
-  if (target === "opencode")
-    return model.endpoints.includes("/chat/completions")
-  return model.endpoints.some(
-    (endpoint) => endpoint === "/responses" || endpoint === "/chat/completions",
+  switch (target) {
+    case "antigravity": {
+      return isGoogleChatModel(model)
+    }
+    case "codex": {
+      return model.endpoints.includes("/responses")
+    }
+    case "opencode": {
+      return model.endpoints.includes("/chat/completions")
+    }
+    case "claude-code":
+    case "curl": {
+      return model.endpoints.some(
+        (endpoint) =>
+          endpoint === "/responses" || endpoint === "/chat/completions",
+      )
+    }
+    default: {
+      const exhaustive: never = target
+      return exhaustive
+    }
+  }
+}
+
+export function selectLaunchModel(
+  models: ReadonlyArray<DesktopModel>,
+  target: LaunchConfiguredAgent,
+  savedModelId: string | null,
+): DesktopModel | null {
+  const compatible = models.filter((model) => supportsAgent(model, target))
+  return (
+    compatible.find((model) => model.id === savedModelId)
+    ?? compatible.find((model) => model.id === "gemini-4-neon")
+    ?? compatible.find((model) => !model.preview)
+    ?? compatible.at(0)
+    ?? null
   )
 }
 
@@ -108,11 +200,11 @@ function checkAgentConnection(options: ConnectionOptions): void {
     throw new Error(
       "Review this agent's existing configuration before connecting.",
     )
-  const saved = config.target === "claude-code" ? config.rootUrl : config.apiUrl
-  const expected =
-    config.target === "claude-code" ?
-      options.connection.rootUrl
-    : options.connection.apiUrl
+  const saved =
+    AGENT_DETAILS[config.target].endpointKind === "root" ?
+      config.rootUrl
+    : config.apiUrl
+  const expected = connectionUrlForAgent(options.connection, config.target)
   if (
     (saved !== null || config.status === "configured")
     && !endpointMatches(saved, expected)
@@ -231,6 +323,68 @@ function opencodeSnippet(options: SnippetOptions): string {
   ].join("\n")
 }
 
+const powershellAgySettings = String.raw`$agySettings = if (($PSVersionTable.PSVersion.Major -gt 7 -or ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -ge 3)) -and $PSNativeCommandArgumentPassing -ne 'Legacy' -and (Get-Command agy -ErrorAction SilentlyContinue).Source -notmatch '\.(cmd|bat)$') { '{"modelProvider":"gemini"}' } else { '{\"modelProvider\":\"gemini\"}' }`
+
+function renderAntigravityCommand(options: {
+  origin: string
+  apiKey: string
+  modelId: string
+  shell: DesktopSettings["shell"]
+}): string {
+  const { origin, apiKey, modelId, shell } = options
+  const lines = [
+    environment("GOOGLE_GEMINI_BASE_URL", origin, shell),
+    environment("GEMINI_API_KEY", apiKey, shell),
+  ]
+  if (shell === "powershell") {
+    lines.push(
+      powershellAgySettings,
+      "",
+      `agy --settings $agySettings --model ${quote(modelId, shell)}`,
+    )
+    return lines.join("\n")
+  }
+  lines.push(
+    "",
+    `agy --settings '{"modelProvider":"gemini"}' --model ${quote(modelId, shell)}`,
+  )
+  return lines.join("\n")
+}
+
+function antigravitySnippet(options: SnippetOptions): string {
+  return renderAntigravityCommand({
+    origin: connectionOrigin(options.connection),
+    apiKey:
+      options.connection.authentication.kind === "keyed" ?
+        options.connection.authentication.key
+      : "local-proxy",
+    modelId: options.selectedModelId,
+    shell: options.shell,
+  })
+}
+
+export function createLaunchPreview(options: {
+  target: LaunchConfiguredAgent
+  connection: PublicConnection
+  model: DesktopModel
+  modelId?: string
+  shell: DesktopSettings["shell"]
+}): string {
+  if (!supportsAgent(options.model, options.target))
+    throw new Error(
+      "This model does not support this agent's API. Choose another model.",
+    )
+  return renderAntigravityCommand({
+    origin: connectionOrigin(options.connection),
+    apiKey:
+      options.connection.authentication.kind === "keyed" ?
+        "<LOCAL_API_KEY>"
+      : "local-proxy",
+    modelId: options.modelId ?? options.model.id,
+    shell: options.shell,
+  })
+}
+
 export function createHttpRequest(options: {
   connection: PublicConnection
   model: DesktopModel
@@ -301,6 +455,7 @@ export function createConnectionSnippet(options: ConnectionOptions): string {
     "claude-code": claudeSnippet,
     codex: codexSnippet,
     opencode: opencodeSnippet,
+    antigravity: antigravitySnippet,
     curl: httpSnippet,
   }
   return snippets[options.target](context)

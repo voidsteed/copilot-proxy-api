@@ -1,9 +1,12 @@
 import type { LegacyProxyControl } from "../../src/lib/legacy-proxy"
 import type {
+  AgentConfigView,
   AgentModel,
   AuthorizationId,
   ConfigurableAgent,
+  LaunchAgentDiagnostics,
   LegacySnapshot,
+  ModelSelectableAgent,
   NativeConnection,
   NativeSnapshot,
   RuntimeOverrides,
@@ -19,14 +22,19 @@ import type {
 import type { ControllerContext } from "./controller-session"
 import type { StoredCredentials } from "./types"
 
-import { configuredProxyConnections } from "../../src/lib/agent-config"
+import {
+  configuredProxyConnections,
+  inspectAgentConfigs,
+} from "../../src/lib/agent-config"
+import { inspectLaunchAgents } from "../../src/lib/launch-agent-diagnostics"
 import { probeLegacyProxy } from "../../src/lib/legacy-proxy"
 import {
   managedCapabilitiesSchema,
   nativeConnectionSchema,
+  runtimeOptionsSchema,
 } from "../../src/lib/proxy-contracts"
 import { UpstreamError } from "../engine/upstream"
-import { supportsAgent } from "../shared/connections"
+import { selectLaunchModel, supportsAgent } from "../shared/connections"
 import { signInError } from "./failure-messages"
 import { executeProbe } from "./probe"
 import {
@@ -93,6 +101,7 @@ export function initialSnapshot(
     runtime: null,
     settings: options.settings,
     agentConfigs: [],
+    launchAgentDiagnostics: [],
     lastConfigureResult: null,
     models: [],
     modelsFetchedAt: null,
@@ -394,9 +403,13 @@ export function discoverLegacy(
 }
 export function proposeAgentModel(
   state: Pick<DesktopSnapshot, "settings" | "models">,
-  target: ConfigurableAgent,
+  target: ModelSelectableAgent,
 ): Extract<AgentModel, { kind: "proposed" }> | null {
   const selected = state.settings.agentModelChoices[target]
+  if (target === "antigravity") {
+    const candidate = selectLaunchModel(state.models, target, selected)
+    return candidate ? { kind: "proposed", catalogId: candidate.id } : null
+  }
   const configured = state.models.find(
     (model) => model.id === selected && supportsAgent(model, target),
   )
@@ -413,6 +426,57 @@ export function proposeAgentModel(
     )
     ?? compatible.at(0)
   return candidate ? { kind: "proposed", catalogId: candidate.id } : null
+}
+export async function inspectAllAgents(options: {
+  homeDirectory: string
+  connection: NativeConnection | null
+  state: Pick<DesktopSnapshot, "settings" | "models">
+}): Promise<{
+  agentConfigs: Array<AgentConfigView>
+  launchAgentDiagnostics: Array<LaunchAgentDiagnostics>
+}> {
+  const [agentConfigs, launchAgentDiagnostics] = await Promise.all([
+    inspectAgentConfigs({
+      homeDirectory: options.homeDirectory,
+      connection: options.connection,
+      catalog: options.state.models,
+      proposals: {
+        "claude-code":
+          proposeAgentModel(options.state, "claude-code")?.catalogId ?? null,
+        codex: proposeAgentModel(options.state, "codex")?.catalogId ?? null,
+        opencode:
+          proposeAgentModel(options.state, "opencode")?.catalogId ?? null,
+        antigravity:
+          proposeAgentModel(options.state, "antigravity")?.catalogId ?? null,
+      },
+    }),
+    inspectLaunchAgents(options.homeDirectory),
+  ])
+  return { agentConfigs, launchAgentDiagnostics }
+}
+export function defaultRuntimeOptions(
+  settings: Pick<DesktopSnapshot["settings"], "port" | "accountType">,
+) {
+  return runtimeOptionsSchema.parse({
+    port: settings.port,
+    accountType: settings.accountType,
+    manualApprove: false,
+    rateLimitSeconds: null,
+    rateLimitWait: false,
+    responsesContextTrim: false,
+    proxyFromEnvironment: false,
+  })
+}
+export function shouldClearConfigureResult(options: {
+  prior: DesktopSnapshot["lastConfigureResult"]
+  views: Array<AgentConfigView>
+  clearStaleTarget?: ConfigurableAgent
+}): boolean {
+  const { prior, views, clearStaleTarget } = options
+  if (clearStaleTarget === undefined || prior === null) return false
+  if (prior.view.target !== clearStaleTarget) return false
+  const latest = views.find((view) => view.target === clearStaleTarget)
+  return !latest || latest.status !== prior.view.status
 }
 export async function runGatewayProbe(
   context: ControllerContext,

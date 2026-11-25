@@ -20,39 +20,21 @@ import {
   settingsSchema,
 } from "../shared/contracts"
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-export function pickProvidedSettingsPatch(
-  rawInput: unknown,
-  parsed: DesktopSettingsPatch,
-): DesktopSettingsPatch {
-  if (!isRecord(rawInput) || !isRecord(rawInput.settings)) return parsed
-  const raw = rawInput.settings
-  const patch: DesktopSettingsPatch = {}
-  if (raw.port !== undefined) patch.port = parsed.port
-  if (raw.accountType !== undefined) patch.accountType = parsed.accountType
-  if (raw.startOnLaunch !== undefined)
-    patch.startOnLaunch = parsed.startOnLaunch
-  if (raw.launchAtLogin !== undefined)
-    patch.launchAtLogin = parsed.launchAtLogin
-  if (raw.closeToTray !== undefined) patch.closeToTray = parsed.closeToTray
-  if (raw.theme !== undefined) patch.theme = parsed.theme
-  if (raw.preferredModel !== undefined)
-    patch.preferredModel = parsed.preferredModel
-  if (raw.shell !== undefined) patch.shell = parsed.shell
-  if (isRecord(raw.agentModelChoices) && parsed.agentModelChoices) {
-    const choices: NonNullable<DesktopSettingsPatch["agentModelChoices"]> = {}
-    if (raw.agentModelChoices["claude-code"] !== undefined)
-      choices["claude-code"] = parsed.agentModelChoices["claude-code"]
-    if (raw.agentModelChoices.codex !== undefined)
-      choices.codex = parsed.agentModelChoices.codex
-    if (raw.agentModelChoices.opencode !== undefined)
-      choices.opencode = parsed.agentModelChoices.opencode
-    patch.agentModelChoices = choices
+function mergeAgentModelChoices(
+  current: DesktopSettings["agentModelChoices"],
+  patch: NonNullable<DesktopSettingsPatch["agentModelChoices"]>,
+): DesktopSettings["agentModelChoices"] {
+  return {
+    ...current,
+    ...(patch["claude-code"] !== undefined ?
+      { "claude-code": patch["claude-code"] }
+    : {}),
+    ...(patch.codex !== undefined ? { codex: patch.codex } : {}),
+    ...(patch.opencode !== undefined ? { opencode: patch.opencode } : {}),
+    ...(patch.antigravity !== undefined ?
+      { antigravity: patch.antigravity }
+    : {}),
   }
-  return patch
 }
 
 export function mergeSettingsPatch(
@@ -81,10 +63,10 @@ export function mergeSettingsPatch(
     ...(patch.shell !== undefined ? { shell: patch.shell } : {}),
     agentModelChoices:
       patch.agentModelChoices ?
-        {
-          ...current.agentModelChoices,
-          ...patch.agentModelChoices,
-        }
+        mergeAgentModelChoices(
+          current.agentModelChoices,
+          patch.agentModelChoices,
+        )
       : current.agentModelChoices,
   }
 }
@@ -133,11 +115,9 @@ export const credentialsSchema = z
 export const newGatewayKey = () => randomBytes(32).toString("base64url")
 
 export async function runBestEffort(task: () => Promise<void>): Promise<void> {
-  try {
-    await task()
-  } catch {
-    // Keep primary operation errors intact during rollback.
-  }
+  await Promise.resolve()
+    .then(task)
+    .catch(() => undefined)
 }
 
 export async function decodeRestoredAuthentication(options: {
@@ -194,11 +174,9 @@ export async function persistSettings(
     try {
       await apply(options.next.launchAtLogin)
     } catch (error) {
-      try {
+      await runBestEffort(async () => {
         await apply(options.previous.launchAtLogin)
-      } catch {
-        // Ignore rollback errors so the original launch-item failure surfaces.
-      }
+      })
       const message =
         error instanceof Error && error.message.trim().length > 0 ?
           error.message.trim()
@@ -211,11 +189,9 @@ export async function persistSettings(
     return { kind: "saved" }
   } catch {
     if (launchChanged && apply) {
-      try {
+      await runBestEffort(async () => {
         await apply(options.previous.launchAtLogin)
-      } catch {
-        // Ignore rollback errors so the save failure still returns cleanly.
-      }
+      })
     }
     return {
       kind: "failed",

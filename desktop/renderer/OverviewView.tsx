@@ -21,6 +21,7 @@ import { useState } from "react"
 
 import type { ViewProps } from "./App"
 
+import { isGoogleChatModel } from "../shared/contracts"
 import { RequestTable } from "./ActivityView"
 import {
   Badge,
@@ -193,7 +194,9 @@ export function OverviewView({
               <Terminal size={24} strokeWidth={1.6} aria-hidden="true" />
             </div>
             <strong>Your agents</strong>
-            <span className="node-detail">Claude Code, Codex, OpenCode</span>
+            <span className="node-detail">
+              Claude Code, Codex, OpenCode, Antigravity CLI
+            </span>
             <button
               type="button"
               className="text-button"
@@ -429,7 +432,8 @@ function TestRequestPanel({
   const probeModels = snapshot.models.filter(
     (model) =>
       model.endpoints.includes("/chat/completions")
-      || model.endpoints.includes("/responses"),
+      || model.endpoints.includes("/responses")
+      || isGoogleChatModel(model),
   )
   const selectedModel =
     probeModels.find((model) => model.id === modelId)

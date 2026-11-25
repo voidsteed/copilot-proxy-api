@@ -1,6 +1,6 @@
 # Copilot Proxy
 
-Copilot Proxy is a desktop app for one GitHub Copilot account. It runs a local gateway and prepares agent setups for Claude Code, Codex, OpenCode, and HTTP clients. The installed app includes Electron and Node. Users do not need Bun or Node.
+Copilot Proxy is a desktop app for one GitHub Copilot account. It runs a local gateway and prepares agent setups for Claude Code, Codex, OpenCode, Antigravity CLI (`agy`), and HTTP clients. The installed app includes Electron and Node. Users do not need Bun or Node.
 
 The desktop version is **0.0.8 build 8**. The CLI keeps its separate **0.10.33** release history.
 
@@ -10,7 +10,7 @@ The app has five views.
 | -------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Overview | Sign in, start or stop the gateway, disconnect an unreachable legacy CLI, inspect usage, send a test request, and view recent requests. |
 | Models   | Search the Copilot catalog, filter by provider or capability, inspect limits, and open a test request for any inference model.          |
-| Agents   | Inspect Claude Code, Codex, and OpenCode files, add missing settings safely, open config folders, and copy launch or HTTP commands.     |
+| Agents   | Inspect Claude Code, Codex, and OpenCode files, add missing settings safely, open config folders, inspect Antigravity CLI (`agy`) read-only, and copy session or HTTP commands. |
 | Activity | Filter or clear session request metadata, including timing, tokens, and outcomes.                                                       |
 | Settings | Change the port, account type, local API key, appearance, shell, and desktop behavior.                                                  |
 
@@ -19,10 +19,10 @@ The app has five views.
 1. Select **Sign in with GitHub** and copy the device code.
 2. Open GitHub from the app and approve the code at `https://github.com/login/device`.
 3. Check that the gateway runs in **Overview**. If it is stopped, select **Start gateway**.
-4. Open **Agents**, choose Claude Code, Codex, OpenCode, or HTTP, and pick a compatible model if the agent is not already configured.
-5. Select **Configure** to add missing settings without overwriting existing values, or copy the launch command or HTTP request and run it in your terminal.
+4. Open **Agents**, choose Claude Code, Codex, OpenCode, Antigravity CLI, or HTTP, and pick a compatible model if the agent is not already configured.
+5. For Claude Code, Codex, and OpenCode, select **Configure** to add missing settings without overwriting existing values. For Antigravity CLI (`agy`) or HTTP, copy the session command or HTTP request and run it in your terminal.
 
-The gateway binds to loopback and supports OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini `/v1/models` and `/v1beta/models` routes. By default, the desktop gateway requires a generated local key. GitHub and Copilot tokens stay in the native process. When you select **Configure**, the app adds only missing agent settings and preserves existing values, comments, permissions, and symlinks. Codex requires a model that supports the Responses API.
+The gateway binds to loopback and supports OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini `/v1/models` and `/v1beta/models` routes. By default, the desktop gateway requires a generated local key. GitHub and Copilot tokens stay in the native process. When you select **Configure**, the app adds only missing agent settings and preserves existing values, comments, permissions, and symlinks. Codex requires a model that supports the Responses API. Antigravity CLI (`agy`) requires a Google chat model, runs through a non-destructive session command, and inspects `~/.gemini/antigravity-cli/settings.json` strictly read-only without modifying it.
 
 The desktop app shares one local gateway with the CLI. If a configured legacy CLI proxy is already running, the desktop attaches in read-only mode and marks its controls as managed in Terminal until you disconnect or restart it. With the desktop app installed, `copilot-proxy-api start` connects to or wakes the shared owner unless you pass `--standalone` to run a separate CLI server.
 

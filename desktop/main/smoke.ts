@@ -16,6 +16,7 @@ import {
   seedNativeAgentFiles,
   verifyNativeAgentFile,
 } from "../testing/smoke-fixtures"
+import { verifyNativeAntigravity } from "./smoke-antigravity"
 import { verifyNativeLegacy } from "./smoke-legacy"
 import { verifyNativeSharing } from "./smoke-shared"
 
@@ -235,7 +236,7 @@ export async function runNativeSmoke(options: {
     assert.equal(keyed.kind, "applied")
     const connected = controller.snapshot()
     assert.equal(connected.fixture, true)
-    assert.equal(connected.models.length, 6)
+    assert.equal(connected.models.length, 7)
     assert(
       connected.models.some((model) => model.id === "fixture-responses-only"),
     )
@@ -580,6 +581,13 @@ export async function runNativeSmoke(options: {
     await capture("native-agent-opencode")
     checks.push(
       "Rendered OpenCode Configure adds its own missing model and preserves its symlink, comments, permissions, MCP settings and repeated contents",
+      ...(await verifyNativeAntigravity({
+        controller,
+        homeDirectory: options.homeDirectory,
+        gatewayKey,
+        origin: originalBase.replace(/\/v1$/, ""),
+        ui: { click, javascript, capture, waitFor },
+      })),
     )
 
     await click("#agent-tab-curl")

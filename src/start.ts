@@ -24,6 +24,7 @@ import { parseLocalApiKeys } from "./lib/local-auth"
 import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
 import {
+  agentModelChoicesSchema,
   nativeConnectionSchema,
   runtimeOverridesSchema,
 } from "./lib/proxy-contracts"
@@ -117,7 +118,7 @@ export async function claudeCodeCommand(options: {
     homeDirectory: options.homeDirectory,
     connection: options.connection,
     catalog: options.catalog,
-    proposals: { "claude-code": null, codex: null, opencode: null },
+    proposals: agentModelChoicesSchema.parse({}),
   })
   const claude = configs.find((config) => config.target === "claude-code")
   const configured = await configuredProxyConnections(options.homeDirectory)

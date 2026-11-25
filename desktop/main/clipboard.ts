@@ -4,7 +4,11 @@ import type {
 } from "../../src/lib/proxy-contracts"
 import type { DesktopCommand, DesktopModel } from "../shared/contracts"
 
-import { createConnectionSnippet, supportsAgent } from "../shared/connections"
+import {
+  AGENT_DETAILS,
+  createConnectionSnippet,
+  supportsAgent,
+} from "../shared/connections"
 
 type ClipboardCommand = Extract<
   DesktopCommand,
@@ -33,9 +37,9 @@ function configurationClipboard(
       message: "Start the proxy before copying an agent configuration.",
     }
   const agentConfig =
-    command.target === "curl" ?
-      undefined
-    : options.agentConfigs.find((view) => view.target === command.target)
+    AGENT_DETAILS[command.target].mode === "file-configured" ?
+      options.agentConfigs.find((view) => view.target === command.target)
+    : undefined
   const configuredModel =
     agentConfig?.model.kind === "configured" ? agentConfig.model : null
   const model = options.models.find(

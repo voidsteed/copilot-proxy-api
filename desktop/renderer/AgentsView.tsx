@@ -12,14 +12,19 @@ import { useEffect, useState } from "react"
 import type {
   AgentConfigView,
   AgentTarget,
+  ConfigurableAgent,
   DesktopModel,
+  LaunchAgentDiagnostics,
+  LaunchConfiguredAgent,
 } from "../shared/contracts"
 import type { ViewProps } from "./App"
 
 import {
   AGENT_DETAILS,
   AGENTS,
+  connectionUrlForAgent,
   createHttpRequest,
+  selectLaunchModel,
   supportsAgent,
 } from "../shared/connections"
 import {
@@ -30,12 +35,22 @@ import {
   ModelSelect,
   nextTabIndex,
 } from "./components"
+import { GatewayStartInstruction, LaunchAgentPanel } from "./LaunchAgentPanel"
 
 interface Selection {
   config: AgentConfigView | null
+  diagnostics: LaunchAgentDiagnostics | null
   models: Array<DesktopModel>
   model: DesktopModel | null
   modelId: string
+}
+
+function isConfigurableAgent(target: AgentTarget): target is ConfigurableAgent {
+  return AGENT_DETAILS[target].mode === "file-configured"
+}
+
+function isLaunchAgent(target: AgentTarget): target is LaunchConfiguredAgent {
+  return AGENT_DETAILS[target].mode === "launch-configured"
 }
 
 function selectionFor(
@@ -43,13 +58,31 @@ function selectionFor(
   target: AgentTarget,
   httpModelId: string,
 ): Selection {
-  const config =
-    target === "curl" ? null : (
-      (snapshot.agentConfigs.find((view) => view.target === target) ?? null)
-    )
   const models = snapshot.models.filter((model) => supportsAgent(model, target))
+  if (isLaunchAgent(target)) {
+    const diagnostics =
+      snapshot.launchAgentDiagnostics.find(
+        (entry) => (entry.target as AgentTarget) === target,
+      ) ?? null
+    const model = selectLaunchModel(
+      snapshot.models,
+      target,
+      snapshot.settings.agentModelChoices[target],
+    )
+    return {
+      config: null,
+      diagnostics,
+      models,
+      model,
+      modelId: model?.id ?? "",
+    }
+  }
+  const config =
+    isConfigurableAgent(target) ?
+      (snapshot.agentConfigs.find((view) => view.target === target) ?? null)
+    : null
   let modelId = httpModelId
-  if (target !== "curl") {
+  if (isConfigurableAgent(target)) {
     modelId = snapshot.settings.agentModelChoices[target] ?? ""
     if (config?.model.kind === "proposed") modelId = config.model.catalogId
     if (config?.model.kind === "configured")
@@ -59,6 +92,7 @@ function selectionFor(
   if (target === "curl" && model === null) model = models.at(0) ?? null
   return {
     config,
+    diagnostics: null,
     models,
     model,
     modelId:
@@ -70,6 +104,9 @@ function selectionFor(
 
 function incompatibleModelMessage(target: AgentTarget): string {
   switch (target) {
+    case "antigravity": {
+      return "Antigravity CLI requires a Google chat model exposed through GitHub Copilot."
+    }
     case "codex": {
       return "Codex requires a model that supports the Responses API."
     }
@@ -87,14 +124,24 @@ function incompatibleModelMessage(target: AgentTarget): string {
   }
 }
 
-export function AgentsView({ snapshot, run, pending }: ViewProps) {
-  const [target, setTarget] = useState<AgentTarget>("claude-code")
+export function AgentsView({
+  snapshot,
+  run,
+  pending,
+  initialTarget = "claude-code",
+}: ViewProps & { initialTarget?: AgentTarget }) {
+  const [target, setTarget] = useState<AgentTarget>(initialTarget)
   const [httpModelId, setHttpModelId] = useState("")
   useEffect(() => {
-    if (target !== "curl")
+    if (isConfigurableAgent(target)) {
       void run({ kind: "inspect-agent-config", target }, undefined, {
         silent: true,
       })
+    } else if (isLaunchAgent(target)) {
+      void run({ kind: "inspect-launch-agent", target }, undefined, {
+        silent: true,
+      })
+    }
   }, [run, target])
   const status = gatewayStatus(snapshot.gateway)
   const selected = selectionFor(snapshot, target, httpModelId)
@@ -157,14 +204,24 @@ export function AgentsView({ snapshot, run, pending }: ViewProps) {
           role="tabpanel"
           aria-labelledby={`agent-tab-${target}`}
         >
-          <AgentSetup
-            snapshot={snapshot}
-            run={run}
-            pending={pending}
-            target={target}
-            selected={selected}
-            onHttpModel={setHttpModelId}
-          />
+          {isLaunchAgent(target) ?
+            <LaunchAgentPanel
+              snapshot={snapshot}
+              run={run}
+              pending={pending}
+              target={target}
+              selected={selected}
+              emptyMessage={incompatibleModelMessage(target)}
+            />
+          : <AgentSetup
+              snapshot={snapshot}
+              run={run}
+              pending={pending}
+              target={target}
+              selected={selected}
+              onHttpModel={setHttpModelId}
+            />
+          }
         </div>
       </section>
     </div>
@@ -201,7 +258,7 @@ function AgentSetup({
   selected,
   onHttpModel,
 }: ViewProps & {
-  target: AgentTarget
+  target: ConfigurableAgent | "curl"
   selected: Selection
   onHttpModel: (modelId: string) => void
 }) {
@@ -291,10 +348,7 @@ function AgentSetup({
             <>
               {" "}
               The running proxy uses{" "}
-              {target === "claude-code" ?
-                snapshot.connection.rootUrl
-              : snapshot.connection.apiUrl}
-              .
+              {connectionUrlForAgent(snapshot.connection, target)}.
             </>
           )}
         </p>
@@ -407,31 +461,11 @@ function AgentSetup({
       )}
       <ConfigureFeedback snapshot={snapshot} target={target} />
       {!ready && (
-        <div className="setup-instruction">
-          <span className="instruction-number">1</span>
-          <p>
-            {snapshot.source.kind === "legacy-cli" ?
-              "Start the CLI proxy in Terminal before sending requests."
-            : "Start the gateway before sending requests."}
-          </p>
-          {snapshot.source.kind !== "legacy-cli" && (
-            <Button
-              icon={Terminal}
-              disabled={
-                snapshot.account.kind !== "signed-in"
-                || snapshot.gateway.kind === "starting"
-                || snapshot.gateway.kind === "stopping"
-                || snapshot.gateway.kind === "draining"
-              }
-              busy={pending.has("start-gateway")}
-              onClick={() => {
-                void run({ kind: "start-gateway" })
-              }}
-            >
-              Start gateway
-            </Button>
-          )}
-        </div>
+        <GatewayStartInstruction
+          snapshot={snapshot}
+          run={run}
+          pending={pending}
+        />
       )}
     </>
   )
@@ -445,7 +479,7 @@ function AgentFields({
   selected,
   onHttpModel,
 }: ViewProps & {
-  target: AgentTarget
+  target: ConfigurableAgent | "curl"
   selected: Selection
   onHttpModel: (modelId: string) => void
 }) {
@@ -453,10 +487,13 @@ function AgentFields({
   const configuredModel =
     config?.model.kind === "configured" ? config.model : null
   const actualUrl =
-    target === "claude-code" ?
-      snapshot.connection?.rootUrl
-    : snapshot.connection?.apiUrl
-  const savedUrl = target === "claude-code" ? config?.rootUrl : config?.apiUrl
+    snapshot.connection ?
+      connectionUrlForAgent(snapshot.connection, target)
+    : undefined
+  const savedUrl =
+    AGENT_DETAILS[target].endpointKind === "root" ?
+      config?.rootUrl
+    : config?.apiUrl
   return (
     <div className="view-stack">
       <div className="agent-options">

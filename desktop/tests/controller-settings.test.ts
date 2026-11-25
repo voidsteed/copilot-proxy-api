@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises"
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -17,6 +25,8 @@ import { createControllerSessionState } from "../main/controller-session"
 import { createSettingsStore } from "../main/settings-store"
 import { applyLegacy, initialSnapshot } from "../main/snapshot"
 import { settingsSchema, snapshotSchema } from "../shared/contracts"
+import { startFixtureUpstream } from "../testing/upstream"
+import { availablePort, eventually } from "./fixtures/runtime"
 
 let directory = ""
 
@@ -197,6 +207,7 @@ describe("native command results", () => {
         "claude-code": null,
         codex: "gpt-5.4",
         opencode: "claude-sonnet-4",
+        antigravity: null,
       },
     })
     const persisted = settingsSchema.parse(
@@ -207,8 +218,137 @@ describe("native command results", () => {
       "claude-code": null,
       codex: "gpt-5.4",
       opencode: "claude-sonnet-4",
+      antigravity: null,
     })
     await native.dispose()
+  })
+})
+
+describe("antigravity settings and commands", () => {
+  test("0.0.8 settings without antigravity load cleanly, select-agent-model persists antigravity, and configure-agent rejects antigravity", async () => {
+    const dataDirectory = await mkdtemp(directory + "/antigravity-upgrade-")
+    const homeDirectory = await mkdtemp(directory + "/antigravity-home-")
+    const port = await availablePort()
+    const legacySettings = {
+      port,
+      accountType: "individual",
+      startOnLaunch: false,
+      launchAtLogin: false,
+      closeToTray: true,
+      theme: "dark",
+      preferredModel: "fixture-gpt-4.1",
+      agentModelChoices: {
+        "claude-code": "fixture-claude-sonnet",
+        codex: "fixture-responses-only",
+        opencode: null,
+      },
+      shell: "posix",
+    }
+    await writeFile(
+      join(dataDirectory, "settings.json"),
+      JSON.stringify(legacySettings, null, 2),
+    )
+    const upstream = await startFixtureUpstream()
+    try {
+      const native = await createController({
+        platform: "darwin",
+        dataDirectory,
+        homeDirectory,
+        runtimePath: "unused-when-startOnLaunch-is-false",
+        fixtureOrigin: upstream.origin,
+        version: "0.0.8",
+        vault: {
+          mode: "session-only",
+          load: () =>
+            Promise.resolve({
+              githubToken: "fixture_github_token",
+              gatewayKey: "fixture_gateway_key_01234567890123456789",
+            }),
+          save: () => Promise.resolve(),
+          clear: () => Promise.resolve(),
+        },
+        writeClipboard: () => undefined,
+        openExternal: () => Promise.resolve(),
+      })
+      try {
+        await eventually(() =>
+          native
+            .snapshot()
+            .models.some((model) => model.id === "gemini-2.5-pro"),
+        )
+        expect(native.snapshot().notice).toBeNull()
+        expect(native.snapshot().settings.theme).toBe("dark")
+        expect(native.snapshot().settings.agentModelChoices).toEqual({
+          "claude-code": "fixture-claude-sonnet",
+          codex: "fixture-responses-only",
+          opencode: null,
+          antigravity: null,
+        })
+
+        const selected = await native.execute({
+          kind: "select-agent-model",
+          target: "antigravity",
+          modelId: "gemini-2.5-pro",
+        })
+        expect(selected.outcome).toEqual({ kind: "ok" })
+        expect(selected.snapshot.settings.agentModelChoices.antigravity).toBe(
+          "gemini-2.5-pro",
+        )
+
+        const nonGoogle = await native.execute({
+          kind: "select-agent-model",
+          target: "antigravity",
+          modelId: "fixture-gpt-4.1",
+        })
+        expect(nonGoogle.outcome.kind).toBe("rejected")
+        expect(native.snapshot().settings.agentModelChoices.antigravity).toBe(
+          "gemini-2.5-pro",
+        )
+
+        const rejectedConfigure = await native.execute({
+          kind: "configure-agent",
+          target: "antigravity",
+        })
+        expect(rejectedConfigure.outcome).toEqual({
+          kind: "rejected",
+          message: "The app received an invalid command.",
+        })
+
+        const inspected = await native.execute({
+          kind: "inspect-launch-agent",
+          target: "antigravity",
+        })
+        expect(inspected.outcome).toEqual({ kind: "ok" })
+        expect(inspected.snapshot.notice).toEqual(
+          rejectedConfigure.snapshot.notice,
+        )
+        expect(inspected.snapshot.launchAgentDiagnostics).toEqual([
+          {
+            kind: "absent",
+            target: "antigravity",
+            path: join(
+              homeDirectory,
+              ".gemini",
+              "antigravity-cli",
+              "settings.json",
+            ),
+          },
+        ])
+        expect(
+          await stat(join(homeDirectory, ".gemini")).catch(() => null),
+        ).toBeNull()
+
+        const reloaded = await createSettingsStore(dataDirectory).load()
+        expect(reloaded.recovered).toBe(false)
+        expect(reloaded.settings.agentModelChoices.antigravity).toBe(
+          "gemini-2.5-pro",
+        )
+      } finally {
+        await native.dispose()
+      }
+    } finally {
+      await upstream.close()
+    }
   })
 })
 
