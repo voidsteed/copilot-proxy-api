@@ -49,6 +49,39 @@ describe("copilotFetch", () => {
     expect(response.status).toBe(500)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  test("retries transient 503 responses on >2 MB payloads while still not retrying 500", async () => {
+    const retryableFetchMock = mock(() => {
+      if (retryableFetchMock.mock.calls.length === 1) {
+        return new Response("Service Unavailable", { status: 503 })
+      }
+      return new Response("ok", { status: 200 })
+    })
+    globalThis.fetch = retryableFetchMock as unknown as typeof fetch
+
+    const recovered = await copilotFetch("https://example.com", {
+      method: "POST",
+      body: "x".repeat(2_500_000),
+      retryDelayMs: 0,
+    })
+
+    expect(recovered.status).toBe(200)
+    expect(retryableFetchMock).toHaveBeenCalledTimes(2)
+
+    const serverErrorFetchMock = mock(
+      () => new Response("Internal Server Error", { status: 500 }),
+    )
+    globalThis.fetch = serverErrorFetchMock as unknown as typeof fetch
+
+    const failed = await copilotFetch("https://example.com", {
+      method: "POST",
+      body: "x".repeat(2_500_000),
+      retryDelayMs: 0,
+    })
+
+    expect(failed.status).toBe(500)
+    expect(serverErrorFetchMock).toHaveBeenCalledTimes(1)
+  })
   test("retries transient network failures", async () => {
     const fetchMock = mock(() => {
       if (fetchMock.mock.calls.length === 1) {

@@ -1,12 +1,12 @@
 import consola from "consola"
 
 import { HTTPError } from "./error"
+import { DEAD_ZONE_OVERFLOW_BYTES } from "./prompt-too-long"
 import { isTransientTokenError, refreshCopilotToken } from "./token"
 import { sleep } from "./utils"
 
 const DEFAULT_ATTEMPTS = 3
 const RETRY_DELAY_MS = 250
-const LARGE_PAYLOAD_CONTEXT_OVERFLOW_BYTES = 2_000_000
 
 export interface CopilotFetchOptions extends RequestInit {
   attempts?: number
@@ -24,7 +24,8 @@ export async function copilotFetch(
     retryDelayMs = RETRY_DELAY_MS,
     ...init
   } = options
-  const bodyLength = typeof init.body === "string" ? init.body.length : 0
+  const bodyLength =
+    typeof init.body === "string" ? Buffer.byteLength(init.body, "utf8") : 0
   const requestLabel = formatRequestLabel(url, init.method)
   let canRefreshAuth = true
 
@@ -166,10 +167,7 @@ function formatErrorMessage(error: unknown): string {
 }
 
 function shouldRetryResponse(response: Response, bodyLength: number): boolean {
-  if (
-    response.status >= 500
-    && bodyLength > LARGE_PAYLOAD_CONTEXT_OVERFLOW_BYTES
-  ) {
+  if (response.status === 500 && bodyLength > DEAD_ZONE_OVERFLOW_BYTES) {
     return false
   }
 
@@ -191,7 +189,7 @@ export function isLikelyContextOverflowTimeout(
   bodyLength: number,
 ): boolean {
   return (
-    bodyLength > LARGE_PAYLOAD_CONTEXT_OVERFLOW_BYTES
+    bodyLength > DEAD_ZONE_OVERFLOW_BYTES
     && error instanceof Error
     && /operation timed out|timed out/i.test(error.message)
   )

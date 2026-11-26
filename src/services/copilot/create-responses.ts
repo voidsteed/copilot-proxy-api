@@ -8,12 +8,14 @@ import type {
 
 import { copilotBaseUrl, copilotHeaders } from "~/lib/api-config"
 import { wrapCancellableResponse } from "~/lib/cancellable-response"
+import { MAX_PAYLOAD_BYTES } from "~/lib/context-manager"
 import { copilotFetch } from "~/lib/copilot-fetch"
 import { HTTPError } from "~/lib/error"
+import { getKnownModelPromptLimit } from "~/lib/model-limits"
 import {
-  getKnownModelPromptLimit,
-  getModelPromptLimit,
-} from "~/lib/model-limits"
+  isExplicitContextOverflow,
+  matchContextOverflowError,
+} from "~/lib/prompt-too-long"
 import { state } from "~/lib/state"
 import {
   createEncryptedOutputScope,
@@ -24,13 +26,6 @@ import {
   stripEncryptedOutputParts,
 } from "~/services/copilot/encrypted-output-recovery"
 import { validateResponsesCapabilities } from "~/services/copilot/responses-capabilities"
-
-/**
- * Hard transport ceiling. Azure Front Door rejects bodies above ~5.4 MB before
- * Copilot ever sees them, so trimming to stay under this is not a guess about
- * token accounting — it is a verified wire limit. Enforced unconditionally.
- */
-const MAX_RESPONSES_PAYLOAD_BYTES = 5_000_000
 
 /**
  * Bytes per token for Responses payloads, used only when opt-in token-derived
@@ -117,53 +112,22 @@ export async function createResponses(
 
   if (!response.ok) {
     const errorBody = result.errorBody ?? (await response.text())
+    const bodyBytes = Buffer.byteLength(result.body, "utf8")
     consola.error(
       `Failed to create responses - Status: ${response.status} ${response.statusText}`,
     )
     consola.error(`Response body: ${errorBody}`)
-    consola.error(`Request payload size: ${result.body.length} bytes`)
+    consola.error(`Request payload size: ${bodyBytes} bytes`)
 
-    if (isContextOverflow(response, errorBody, result.body.length)) {
-      const modelCaps = state.models?.data.find((m) => m.id === payload.model)
-        ?.capabilities.limits
-      const maxOutputTokens = payload.max_output_tokens ?? 0
-
-      // Prefer the numbers Copilot reported over a local estimate. Claude Code
-      // uses the gap between them to size its compaction pass, so substituting
-      // a bytes/4 guess for upstream's real count makes it compact by the wrong
-      // amount. Fall back to the estimate only when upstream gave us nothing.
-      const upstream = parseUpstreamTokenCounts(errorBody)
-      const estimatedTokens = upstream.used ?? Math.ceil(result.body.length / 4)
-      const modelLimit =
-        upstream.limit ?? getModelPromptLimit(payload.model, modelCaps)
-      const source = upstream.used ? "upstream-reported" : "estimated"
-
-      consola.warn(
-        `Responses context overflow -> returning 400 prompt-too-long (${source}: ~${estimatedTokens} + ${maxOutputTokens} > ${modelLimit})`,
-      )
-
-      throw new HTTPError(
-        "Prompt too long",
-        new Response(
-          JSON.stringify({
-            type: "error",
-            error: {
-              type: "invalid_request_error",
-              code: "context_length_exceeded",
-              message: `prompt is too long: input length and \`max_tokens\` exceed context limit: ${estimatedTokens} + ${maxOutputTokens} > ${modelLimit} tokens`,
-              // Preserve what upstream actually said, so a client that wants
-              // to diagnose rather than just compact is not flying blind.
-              upstream_error: errorBody.slice(0, 2_000),
-            },
-          }),
-          {
-            status: 400,
-            statusText: "Bad Request",
-            headers: { "content-type": "application/json" },
-          },
-        ),
-      )
-    }
+    const overflowError = matchContextOverflowError({
+      status: response.status,
+      errorBody,
+      bodyBytes,
+      model: payload.model,
+      maxOutputTokens: payload.max_output_tokens ?? 0,
+      envelope: "responses",
+    })
+    if (overflowError) throw overflowError
 
     throw new HTTPError(
       "Failed to create responses",
@@ -221,14 +185,7 @@ async function fetchResponsesWithEncryptedOutputFallback(
     signal,
   )
   initial.response = inspected.response
-  if (
-    inspected.errorBody
-    && isContextOverflow(
-      new Response(null, { status: 400 }),
-      inspected.errorBody,
-      0,
-    )
-  ) {
+  if (inspected.errorBody && isExplicitContextOverflow(inspected.errorBody)) {
     void inspected.response.body?.cancel().catch(() => undefined)
     return {
       ...initial,
@@ -358,17 +315,17 @@ function fitResponsesPayload(
  * applied too, restoring the previous lossy behavior for anyone who wants it.
  */
 function computeResponsesPayloadCeiling(modelId: string): number {
-  if (!state.responsesContextTrim) return MAX_RESPONSES_PAYLOAD_BYTES
+  if (!state.responsesContextTrim) return MAX_PAYLOAD_BYTES
 
   const limits = state.models?.data.find((m) => m.id === modelId)?.capabilities
     .limits
   const maxPromptTokens = getKnownModelPromptLimit(modelId, limits)
-  if (!maxPromptTokens) return MAX_RESPONSES_PAYLOAD_BYTES
+  if (!maxPromptTokens) return MAX_PAYLOAD_BYTES
 
   const tokenDerivedBytes = Math.floor(
     (maxPromptTokens - TOKEN_RESERVE) * CHARS_PER_TOKEN_ESTIMATE,
   )
-  return Math.min(MAX_RESPONSES_PAYLOAD_BYTES, tokenDerivedBytes)
+  return Math.min(MAX_PAYLOAD_BYTES, tokenDerivedBytes)
 }
 
 function truncateStringInput(
@@ -716,91 +673,6 @@ function truncateLargestPayloadStrings(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
-}
-
-/**
- * Error markers that unambiguously mean "the prompt did not fit". These are
- * upstream saying so explicitly, so they are safe to act on regardless of
- * payload size.
- */
-const CONTEXT_OVERFLOW_PATTERNS = [
-  /request entity too large/i,
-  /exceeds the limit of \d+/i,
-  /context_length_exceeded/i,
-  /model_max_prompt_tokens_exceeded/i,
-  /payload too large/i,
-  /maximum context length/i,
-  /prompt is too long/i,
-]
-
-/**
- * Markers of a transient upstream outage. These can coincide with a large
- * payload without the payload being the cause, so they must never be read as
- * context overflow — doing so makes a client compact away history to work
- * around what is really a Copilot hiccup.
- */
-const TRANSIENT_OUTAGE_PATTERNS = [
-  /service unavailable/i,
-  /bad gateway/i,
-  /temporarily unavailable/i,
-  /upstream connect error/i,
-  /overloaded/i,
-  /try again later/i,
-]
-
-function isContextOverflow(
-  response: Response,
-  errorBody: string,
-  bodyLength: number,
-): boolean {
-  if (response.status === 413) return true
-  if (CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorBody))) {
-    return true
-  }
-  if (TRANSIENT_OUTAGE_PATTERNS.some((pattern) => pattern.test(errorBody))) {
-    return false
-  }
-
-  // Copilot's backend hangs rather than cleanly rejecting in the ~2.5-5.3 MB
-  // dead zone, which Bun surfaces as a 500 or an upstream timeout. Restrict
-  // that inference to plain 500s: 502/503/504 are gateway-level outages that
-  // say nothing about whether the prompt fit.
-  const isDeadZoneHang =
-    (response.status === 500 || /operation timed out/i.test(errorBody))
-    && bodyLength > 2_000_000
-
-  return isDeadZoneHang
-}
-
-interface UpstreamTokenCounts {
-  limit?: number
-  used?: number
-}
-
-/**
- * Pull the token counts Copilot actually reported out of an error body, so the
- * client sees upstream's numbers rather than a local guess. Covers the phrasings
- * Copilot has emitted: "maximum context length is N tokens ... resulted in M
- * tokens", "exceeds the limit of N", and JSON bodies carrying explicit fields.
- */
-function parseUpstreamTokenCounts(errorBody: string): UpstreamTokenCounts {
-  const counts: UpstreamTokenCounts = {}
-
-  const maxContext = /maximum context length is (\d+) tokens/i.exec(errorBody)
-  if (maxContext) counts.limit = Number(maxContext[1])
-
-  const resulted = /(?:resulted in|you requested|requested) (\d+) tokens/i.exec(
-    errorBody,
-  )
-  if (resulted) counts.used = Number(resulted[1])
-
-  const exceedsLimit = /exceeds the limit of (\d+)/i.exec(errorBody)
-  if (exceedsLimit) counts.limit ??= Number(exceedsLimit[1])
-
-  const promptTokens = /(\d+) prompt tokens/i.exec(errorBody)
-  if (promptTokens) counts.used ??= Number(promptTokens[1])
-
-  return counts
 }
 
 function sanitizeResponsesPayload(

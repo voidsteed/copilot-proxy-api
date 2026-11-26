@@ -47,7 +47,8 @@ function errorBody(error: unknown) {
   }
   let code = 502
   if (error instanceof GeminiError) code = error.status
-  else if (error instanceof HTTPError) code = error.response.status
+  else if (error instanceof HTTPError)
+    code = error.response.status === 499 ? 503 : error.response.status
   else if (error instanceof Error && error.name === "AbortError") code = 499
   const messages = new Map([
     [413, "Request payload exceeds the maximum allowed size"],
