@@ -1,16 +1,19 @@
 import { describe, expect, test } from "bun:test"
 
+import type { Model } from "~/services/copilot/get-models"
+
 import {
+  fitContext,
   fitUnknownModelContext,
+  prepareChatCompletionsWireRequest,
+  TOOL_IMAGE_HEADER,
   UNKNOWN_MODEL_PAYLOAD_BYTES,
 } from "~/lib/context-manager"
 import {
   type ChatCompletionsPayload,
+  type ContentPart,
   type Message,
 } from "~/services/copilot/create-chat-completions"
-
-const TOOL_IMAGE_HEADER =
-  "Attached image(s) returned by the preceding tool call(s):"
 
 function assertNoOrphanedToolMessages(messages: Array<Message>) {
   const seenToolCallIds = new Set<string>()
@@ -221,5 +224,171 @@ describe("context manager", () => {
         JSON.parse(toolMsg.content as string)
       }).not.toThrow()
     }
+  })
+})
+
+describe("context manager edge cases", () => {
+  test("truncates >100 KB JSON-object and plain-text tool outputs with multibyte UTF-8 and quotes within cap", () => {
+    const chunk = '漢"\\😀\n'
+    const jsonToolPayload: ChatCompletionsPayload = {
+      model: "ultracode",
+      max_tokens: 100,
+      messages: [
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call-json",
+              type: "function",
+              function: { name: "dump", arguments: "{}" },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          tool_call_id: "call-json",
+          content: JSON.stringify({ data: chunk.repeat(300_000) }),
+        },
+        { role: "user", content: "summarize" },
+      ],
+    }
+
+    const fittedJson = fitUnknownModelContext(jsonToolPayload)
+    const jsonToolMsg = fittedJson.messages.find((msg) => msg.role === "tool")
+    expect(typeof jsonToolMsg?.content).toBe("string")
+    const jsonContent = jsonToolMsg?.content as string
+    expect(Buffer.byteLength(jsonContent, "utf8")).toBeLessThanOrEqual(100_000)
+    const parsed = JSON.parse(jsonContent) as {
+      truncated?: boolean
+      output?: string
+    }
+    expect(parsed.truncated).toBe(true)
+    expect(parsed.output).toContain("tool output truncated")
+
+    const textToolPayload: ChatCompletionsPayload = {
+      model: "ultracode",
+      max_tokens: 100,
+      messages: [
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call-text",
+              type: "function",
+              function: { name: "dump", arguments: "{}" },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          tool_call_id: "call-text",
+          content: chunk.repeat(300_000),
+        },
+        { role: "user", content: "summarize" },
+      ],
+    }
+
+    const fittedText = fitUnknownModelContext(textToolPayload)
+    const textToolMsg = fittedText.messages.find((msg) => msg.role === "tool")
+    expect(typeof textToolMsg?.content).toBe("string")
+    const textContent = textToolMsg?.content as string
+    expect(Buffer.byteLength(textContent, "utf8")).toBeLessThanOrEqual(100_000)
+    expect(textContent).toContain("tool output truncated")
+  })
+
+  test("preserves non-text/non-image OpenAI content parts without crashing when stripping images or estimating dual policy", () => {
+    const audioPart = {
+      type: "input_audio",
+      input_audio: { data: "AAAA", format: "wav" },
+    } as unknown as ContentPart
+    const filePart = {
+      type: "file",
+      file: {
+        filename: "notes.pdf",
+        file_data: "data:application/pdf;base64,JVBERi0=",
+      },
+    } as unknown as ContentPart
+
+    const payload: ChatCompletionsPayload = {
+      model: "gpt-test",
+      max_tokens: 100,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "analyze attachments" },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/png;base64,${"A".repeat(1_500_000)}`,
+              },
+            },
+            audioPart,
+            filePart,
+          ],
+        },
+        { role: "user", content: "x".repeat(4_000_000) },
+      ],
+    }
+
+    const prepared = prepareChatCompletionsWireRequest(payload)
+    expect(prepared.utf8Bytes).toBeLessThanOrEqual(5_000_000)
+    expect(prepared.enableVision).toBe(false)
+    expect(Array.isArray(prepared.payload.messages[0]?.content)).toBe(true)
+    const parts = prepared.payload.messages[0]?.content as Array<unknown>
+    expect(parts).toContainEqual(audioPart)
+    expect(parts).toContainEqual(filePart)
+
+    const dualModel: Model = {
+      id: "claude-sonnet-4",
+      name: "Claude Sonnet 4",
+      vendor: "Anthropic",
+      object: "model",
+      version: "1",
+      preview: false,
+      model_picker_enabled: true,
+      supported_endpoints: ["/chat/completions"],
+      capabilities: {
+        family: "claude-sonnet-4",
+        type: "chat",
+        object: "model_capabilities",
+        tokenizer: "o200k_base",
+        limits: { max_prompt_tokens: 200_000, max_output_tokens: 8_192 },
+        supports: { vision: true, streaming: true, tool_calls: true },
+      },
+    }
+    expect(() => fitContext(payload, dualModel)).not.toThrow()
+  })
+
+  test("does not delete real user messages starting with TOOL_IMAGE_HEADER without images or placeholders", () => {
+    const bareHeader = TOOL_IMAGE_HEADER
+    const userQuestion = `${TOOL_IMAGE_HEADER}\n\nWhy does the proxy emit this header?`
+    const payload: ChatCompletionsPayload = {
+      model: "ultracode",
+      max_tokens: 100,
+      messages: [
+        { role: "user", content: "old-turn " + "x".repeat(2_000_000) },
+        { role: "user", content: bareHeader },
+        { role: "user", content: userQuestion },
+        {
+          role: "user",
+          content: [{ type: "text", text: TOOL_IMAGE_HEADER }],
+        },
+        { role: "user", content: "latest question" },
+      ],
+    }
+
+    const fitted = fitUnknownModelContext(payload)
+    expect(
+      Buffer.byteLength(JSON.stringify(fitted), "utf8"),
+    ).toBeLessThanOrEqual(UNKNOWN_MODEL_PAYLOAD_BYTES)
+    expect(fitted.messages.map((msg) => msg.content)).toEqual([
+      bareHeader,
+      userQuestion,
+      [{ type: "text", text: TOOL_IMAGE_HEADER }],
+      "latest question",
+    ])
   })
 })

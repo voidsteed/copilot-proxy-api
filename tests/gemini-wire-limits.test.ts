@@ -1,9 +1,8 @@
-import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, expect, mock, test } from "bun:test"
 
 import type { Model } from "~/services/copilot/get-models"
 
 import { state } from "~/lib/state"
-import * as utils from "~/lib/utils"
 import { server } from "~/server"
 
 const originalFetch = globalThis.fetch
@@ -178,7 +177,6 @@ test("surfaces upstream-reported token counts on Gemini overflow and preserves t
     "model_max_prompt_tokens_exceeded",
   )
 
-  spyOn(utils, "sleep").mockResolvedValue(undefined)
   mockUpstream(
     () =>
       new Response("Service Unavailable: upstream connect error", {
@@ -197,7 +195,6 @@ test("surfaces upstream-reported token counts on Gemini overflow and preserves t
 })
 
 test("maps exhausted upstream Copilot HTTP 499 to retryable 503 UNAVAILABLE instead of CANCELLED", async () => {
-  spyOn(utils, "sleep").mockResolvedValue(undefined)
   mockUpstream(() => new Response("client closed", { status: 499 }))
   const response = await generate(textRequest)
   expect(response.status).toBe(503)
@@ -208,4 +205,85 @@ test("maps exhausted upstream Copilot HTTP 499 to retryable 503 UNAVAILABLE inst
       message: "Upstream request failed",
     },
   })
+})
+
+test("strips oldest screenshot before pruning old text tool outputs on >5 MB Gemini wire payloads", async () => {
+  const pngs = [0, 1, 2, 3].map((tag) => makeSizedPngBase64(tag))
+  const toUrl = (i: number) => `data:image/png;base64,${pngs[i]}`
+  const png = (i: number) => ({
+    inlineData: { mimeType: "image/png", data: pngs[i] },
+  })
+  const oldToolOutput = "old-tool-result-" + "o".repeat(250_000)
+  const recentToolOutput = "recent-tool-result-" + "r".repeat(250_000)
+
+  const response = await generate({
+    contents: [
+      { role: "user", parts: [{ text: "inspect repo" }, png(0), png(1)] },
+      {
+        role: "model",
+        parts: [{ functionCall: { id: "call-1", name: "read", args: {} } }],
+      },
+      {
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              id: "call-1",
+              name: "read",
+              response: { output: oldToolOutput },
+            },
+          },
+        ],
+      },
+      {
+        role: "model",
+        parts: [{ functionCall: { id: "call-2", name: "read", args: {} } }],
+      },
+      {
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              id: "call-2",
+              name: "read",
+              response: { output: recentToolOutput },
+            },
+          },
+          { text: "check new shots" },
+          png(2),
+          png(3),
+        ],
+      },
+    ],
+  })
+
+  expect(response.status).toBe(200)
+  expect(sentRaw).toHaveLength(1)
+  expect(Buffer.byteLength(sentRaw[0], "utf8")).toBeLessThanOrEqual(5_000_000)
+
+  type Part = { type: string; text?: string; image_url?: { url: string } }
+  const payload = sent[0] as {
+    messages: Array<{
+      role: string
+      tool_call_id?: string
+      content: string | Array<Part>
+    }>
+  }
+  const urls = payload.messages.flatMap((m) =>
+    Array.isArray(m.content) ?
+      m.content
+        .filter((p) => p.type === "image_url")
+        .map((p) => p.image_url?.url)
+    : [],
+  )
+  expect(urls).toEqual([toUrl(1), toUrl(2), toUrl(3)])
+
+  const toolMessages = payload.messages.filter((m) => m.role === "tool")
+  expect(toolMessages).toHaveLength(2)
+  expect(toolMessages[0]?.content).toBe(
+    JSON.stringify({ output: oldToolOutput }),
+  )
+  expect(toolMessages[1]?.content).toBe(
+    JSON.stringify({ output: recentToolOutput }),
+  )
 })

@@ -244,3 +244,71 @@ test("enforces 5 MB UTF-8 wire ceiling before fetch and omits Copilot-Vision-Req
   expect(hasRemainingImage).toBe(false)
   expect(new Headers(callInit.headers).get("copilot-vision-request")).toBeNull()
 })
+
+test("does not misclassify a 504 Gateway Timeout mentioning operation timed out on a 2.5 MB payload", async () => {
+  spyOn(utils, "sleep").mockResolvedValue(undefined)
+  const fetchMock = mock(
+    () =>
+      new Response("Gateway Timeout: operation timed out", {
+        status: 504,
+        statusText: "Gateway Timeout",
+      }),
+  )
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const error = await createChatCompletions({
+    messages: [{ role: "user", content: "x".repeat(2_500_000) }],
+    model: "gemini-4-neon",
+  }).catch((caught: unknown) => caught)
+
+  expect(error).toBeInstanceOf(HTTPError)
+  expect(error).not.toBeInstanceOf(PromptTooLongError)
+  if (error instanceof HTTPError) {
+    expect(error.response.status).toBe(504)
+  }
+})
+
+test("clamps fallback PromptTooLongError estimatedTokens above modelLimit on HTTP 413", async () => {
+  state.models = {
+    object: "list",
+    data: [
+      {
+        id: "gemini-4-neon",
+        name: "Gemini 4 Neon",
+        vendor: "Google",
+        object: "model",
+        version: "1",
+        preview: true,
+        model_picker_enabled: true,
+        supported_endpoints: ["/chat/completions"],
+        capabilities: {
+          family: "gemini-4-neon",
+          type: "chat",
+          object: "model_capabilities",
+          tokenizer: "o200k_base",
+          limits: { max_prompt_tokens: 983_040, max_output_tokens: 65_536 },
+          supports: { vision: true, streaming: true, tool_calls: true },
+        },
+      },
+    ],
+  }
+  globalThis.fetch = mock(
+    () =>
+      new Response("Payload Too Large", {
+        status: 413,
+        statusText: "Payload Too Large",
+      }),
+  ) as unknown as typeof fetch
+
+  const error = await createChatCompletions({
+    messages: [{ role: "user", content: "x".repeat(2_500_000) }],
+    model: "gemini-4-neon",
+  }).catch((caught: unknown) => caught)
+
+  expect(error).toBeInstanceOf(PromptTooLongError)
+  if (error instanceof PromptTooLongError) {
+    expect(error.tokenCountSource).toBe("estimated")
+    expect(error.modelLimit).toBe(983_040)
+    expect(error.estimatedTokens).toBeGreaterThan(error.modelLimit)
+  }
+})

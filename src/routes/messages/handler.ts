@@ -144,10 +144,12 @@ async function handleChatCompletions(
     : fitUnknownModelContext(openAIPayload)
 
   if (!model && isPayloadOverUnknownModelCeiling(fittedPayload)) {
-    throw createPromptTooLongError(
-      fittedPayload,
-      JSON.stringify(fittedPayload).length,
-    )
+    throw createPromptTooLongError({
+      model: fittedPayload.model,
+      maxOutputTokens:
+        fittedPayload.max_completion_tokens ?? fittedPayload.max_tokens ?? 0,
+      bodyBytes: Buffer.byteLength(JSON.stringify(fittedPayload), "utf8"),
+    })
   }
 
   if (fittedPayload.messages.length !== openAIPayload.messages.length) {

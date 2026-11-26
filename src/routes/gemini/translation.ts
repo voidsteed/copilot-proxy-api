@@ -6,7 +6,7 @@ import type {
 } from "~/services/copilot/create-chat-completions"
 import type { Model } from "~/services/copilot/get-models"
 
-import { enforceVisionImageLimits } from "~/lib/context-manager"
+import { TOOL_IMAGE_HEADER } from "~/lib/context-manager"
 import { HTTPError } from "~/lib/error"
 
 import {
@@ -206,9 +206,6 @@ function inlineImagePart(
     },
   }
 }
-const TOOL_IMAGE_HEADER =
-  "Attached image(s) returned by the preceding tool call(s):"
-
 interface UserTurnContext {
   pending: Array<PendingCall>
   toolImages: Array<ContentPart>
@@ -224,17 +221,6 @@ function flushToolImages(
     role: "user",
     content: [{ type: "text", text: TOOL_IMAGE_HEADER }, ...toolImages],
   })
-  toolImages.length = 0
-}
-
-function drainToolImages(
-  parts: Array<ContentPart>,
-  toolImages: Array<ContentPart>,
-  includeHeader: boolean,
-) {
-  if (toolImages.length === 0) return
-  if (includeHeader) parts.push({ type: "text", text: TOOL_IMAGE_HEADER })
-  parts.push(...toolImages)
   toolImages.length = 0
 }
 
@@ -287,10 +273,10 @@ function userMessages(
       && !part.thought
       && part.thoughtSignature === undefined
     ) {
-      drainToolImages(parts, context.toolImages, true)
+      flushToolImages(messages, context.toolImages)
       parts.push({ type: "text", text: part.text })
     } else if ("inlineData" in part) {
-      drainToolImages(parts, context.toolImages, false)
+      flushToolImages(messages, context.toolImages)
       parts.push(inlineImagePart(part.inlineData, context.vision))
     } else if ("functionResponse" in part) {
       flush()
@@ -535,22 +521,19 @@ export function translateRequest(
       advertisedMaximum
     : undefined
   const requestedMaximum = config?.maxOutputTokens
-  return enforceVisionImageLimits(
-    {
-      model: model.id,
-      messages: translateMessages(request, model),
-      stream,
-      tools: translateTools(request),
-      tool_choice: toolChoice(request),
-      max_tokens:
-        requestedMaximum !== undefined && maximum !== undefined ?
-          Math.min(requestedMaximum, maximum)
-        : (requestedMaximum ?? maximum),
-      ...generationOptions(config),
-      reasoning_effort: effort,
-    },
-    model,
-  )
+  return {
+    model: model.id,
+    messages: translateMessages(request, model),
+    stream,
+    tools: translateTools(request),
+    tool_choice: toolChoice(request),
+    max_tokens:
+      requestedMaximum !== undefined && maximum !== undefined ?
+        Math.min(requestedMaximum, maximum)
+      : (requestedMaximum ?? maximum),
+    ...generationOptions(config),
+    reasoning_effort: effort,
+  }
 }
 
 export function finishReason(
