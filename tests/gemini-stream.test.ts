@@ -565,3 +565,44 @@ test("unsupported finish_reason emits a 502 SSE error without leaking it and war
     .join(" ")
   expect(warningText).toContain("unexpected_reason")
 })
+
+test("sanitizes control characters in unsupported finish_reason warnings and warns on mid-stream errors", async () => {
+  warnSpy = spyOn(consola, "warn").mockImplementation(
+    Object.assign(() => undefined, { raw: () => undefined }),
+  )
+  streamFetch(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            event({ content: "hi" }, "bad\nFORGED\u001b[31m")
+              + "data: [DONE]\n\n",
+          ),
+        )
+        controller.close()
+      },
+    }),
+  )
+  await (await generate()).text()
+
+  const firstWarn = warnSpy.mock.calls.flat().map(String).join(" ")
+  expect(firstWarn).not.toContain("\n")
+  expect(firstWarn).not.toContain("\u001b")
+
+  warnSpy.mockClear()
+  streamFetch(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("data: {broken json\n\n"))
+        controller.close()
+      },
+    }),
+  )
+  const malformed = await (await generate()).text()
+  expect(decodeEvents(malformed).at(-1)).toMatchObject({
+    error: { code: 502, status: "UNAVAILABLE" },
+  })
+  const streamWarn = warnSpy.mock.calls.flat().map(String).join(" ")
+  expect(streamWarn).toContain(model.id)
+  expect(streamWarn).toContain("502")
+})

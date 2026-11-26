@@ -1,5 +1,6 @@
 import type { Context } from "hono"
 
+import consola from "consola"
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 
@@ -194,8 +195,13 @@ async function generate(c: Context) {
         for (const output of translated.complete())
           await stream.writeSSE({ data: JSON.stringify(output) })
     } catch (error) {
-      if (!controller.signal.aborted)
-        await stream.writeSSE({ data: JSON.stringify(errorBody(error)) })
+      if (!controller.signal.aborted) {
+        const body = errorBody(error)
+        consola.warn(
+          `Gemini stream error (${model.id}): ${body.error.code} ${body.error.status} - ${body.error.message}`,
+        )
+        await stream.writeSSE({ data: JSON.stringify(body) })
+      }
     } finally {
       controller.abort()
       c.req.raw.signal.removeEventListener("abort", abort)

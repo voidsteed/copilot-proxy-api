@@ -536,4 +536,66 @@ describe("requestLogMiddleware Gemini SSE", () => {
     expect(line).toContain("Response stream failed (502 UNAVAILABLE)")
     expect(line).not.toContain("PRIVATE")
   })
+
+  test("logs client metadata on 200 Gemini SSE error, supports %3A paths, and rejects blank finishReason as terminal", async () => {
+    setModel("gemini-4-neon")
+    const logs: Array<string> = []
+    const app = new Hono()
+    app.use(createRequestLogMiddleware((line) => logs.push(line)))
+    app.post("/v1beta/models/:model", (c) => {
+      setRequestLogMetadata(c, { model: "gemini-4-neon", effort: "high" })
+      const body =
+        c.req.query("mode") === "blank-finish" ?
+          `data: ${JSON.stringify({
+            candidates: [
+              {
+                index: 0,
+                content: { role: "model", parts: [{ text: "partial" }] },
+                finishReason: "",
+              },
+            ],
+          })}\n\n`
+        : `data: ${JSON.stringify({
+            error: { code: 502, status: "UNAVAILABLE", message: "SECRET" },
+          })}\n\n`
+      return new Response(body, {
+        headers: { "content-type": "text/event-stream" },
+      })
+    })
+
+    await (
+      await app.request(
+        "/v1beta/models/gemini-4-neon%3AstreamGenerateContent?alt=sse",
+        {
+          method: "POST",
+          headers: {
+            "user-agent": "AgyClient/1.5",
+            "x-forwarded-for": "100.64.225.91",
+          },
+        },
+      )
+    ).text()
+    await (
+      await app.request(
+        "/v1beta/models/gemini-4-neon%3AstreamGenerateContent?alt=sse&mode=blank-finish",
+        {
+          method: "POST",
+          headers: { "user-agent": "AgyClient/1.5" },
+        },
+      )
+    ).text()
+
+    expect(logs).toHaveLength(2)
+    const errLine = stripAnsi(logs[0] ?? "")
+    expect(errLine).toContain("Response stream failed (502 UNAVAILABLE)")
+    expect(errLine).toContain("AgyClient/1.5")
+    expect(errLine).toContain("100.64.225.91")
+    expect(errLine).not.toContain("SECRET")
+
+    const truncatedLine = stripAnsi(logs[1] ?? "")
+    expect(truncatedLine).toContain(
+      "Gemini stream closed before a terminal event",
+    )
+    expect(truncatedLine).toContain("AgyClient/1.5")
+  })
 })

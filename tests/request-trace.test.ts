@@ -131,4 +131,33 @@ describe("requestTraceMiddleware", () => {
 
     expect(headerlessBody.data[0]?.client).toBeUndefined()
   })
+
+  test("ignores spoofed x-forwarded-for from non-loopback peers but honors it from loopback proxies", async () => {
+    const app = new Hono()
+    app.use(requestTraceMiddleware)
+    app.get("/ok", (c) => c.text("ok"))
+    app.route("/debug", debugRoutes)
+
+    const remoteReq = requestWithRawHeaders("http://localhost/ok", {
+      "user-agent": "probe/1.0",
+      "x-forwarded-for": "127.0.0.1",
+    }) as Request & { ip?: string }
+    remoteReq.ip = "::ffff:100.64.225.91"
+    await app.fetch(remoteReq)
+
+    const proxyReq = requestWithRawHeaders("http://localhost/ok", {
+      "user-agent": "probe/1.0",
+      "x-forwarded-for": "100.64.225.92, 127.0.0.1",
+    }) as Request & { ip?: string }
+    proxyReq.ip = "127.0.0.1"
+    await app.fetch(proxyReq)
+
+    const debugResponse = await app.request("/debug/requests")
+    const debugBody = (await debugResponse.json()) as {
+      data: Array<{ client?: { remoteAddress?: string } }>
+    }
+
+    expect(debugBody.data[0]?.client?.remoteAddress).toBe("100.64.225.92")
+    expect(debugBody.data[1]?.client?.remoteAddress).toBe("100.64.225.91")
+  })
 })
