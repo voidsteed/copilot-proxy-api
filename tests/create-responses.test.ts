@@ -647,7 +647,7 @@ test("fills required tool descriptions in Responses input history", async () => 
   expect(tools[4].description).toBe("Tool blank_history_description")
 })
 
-test.each(["gpt-6-astra", "gpt-6.1-sol"])(
+test.each(["gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-sol"])(
   "removes unsupported sampling and logprob parameters for %s",
   async (model) => {
     const payload = {

@@ -469,7 +469,7 @@ codex -c model_provider='"openai"'
 
 ### Notes
 
-- GPT-6 Astra and GPT-6.1 Sol use the Responses API; before forwarding, the proxy removes their incompatible sampling and logprob fields: `temperature`, `top_p`, `top_logprobs`, `logprobs`, and `message.output_text.logprobs` from `include`.
+- GPT-6 Astra, GPT-6.1 Sol, and GPT-6.2 Sol use the Responses API; before forwarding, the proxy removes their incompatible sampling and logprob fields: `temperature`, `top_p`, `top_logprobs`, `logprobs`, and `message.output_text.logprobs` from `include`.
 - `service_tier` is ChatGPT-plan-specific. Codex may send it, but Copilot's Responses API rejects it, so the proxy strips it before forwarding.
 - Reasoning effort is checked against Copilot's advertised levels when available. Unsupported values return a 400 `unsupported_parameter` error; unknown capabilities are forwarded unchanged.
 - Codex model-catalog refreshes keep Codex's bundled metadata and instructions. Requests with Codex's `client_version` query receive its native empty-catalog shape; ordinary `GET /v1/models` requests still return the full OpenAI-compatible model list.
@@ -496,6 +496,25 @@ bun run test:codex
 
 This checks text, shell tool calls/results, resumed history, images, and HTTP cancellation using an isolated temporary Codex configuration. It makes real Copilot requests. Override the source proxy with `COPILOT_PROXY_URL` or the model with `CODEX_SMOKE_MODEL`; for business/enterprise accounts set `COPILOT_ACCOUNT_TYPE` accordingly.
 
+### Codex Desktop
+
+Codex Desktop uses its bundled Codex app-server and the same `~/.codex/config.toml` provider settings. Restart Desktop after changing providers because existing threads may retain their selected model and reasoning effort.
+
+The proxy normalizes Copilot's rotating stream item IDs so item-start, text or reasoning delta, and item-completion events correlate in both CLI and Desktop. It restores the original opaque IDs on history replay using an account-scoped and model-scoped bounded 30-minute cache while keeping tool call IDs and encrypted reasoning intact.
+
+Test the Desktop backend's actual JSON-RPC protocol (initialization, thread start, turn start, item lifecycle, and multi-turn history):
+
+```sh
+bun run test:codex-desktop
+```
+
+On macOS this defaults to `/Applications/Codex.app/Contents/Resources/codex`. Set `CODEX_BIN` for another installation. To run the CLI smoke suite with Desktop's bundled binary:
+
+```sh
+CODEX_BIN="/Applications/Codex.app/Contents/Resources/codex" bun run test:codex
+```
+
+MCP server authentication is independent of Copilot authentication. If Codex reports `Auth required` for an MCP server, run `codex mcp login <server>` and complete the browser login. Credential-store fallback warnings alone do not indicate a Copilot request failure.
 
 ## Using with Antigravity CLI (agy)
 

@@ -25,7 +25,14 @@ import {
   rememberRejectedEncryptedOutputs,
   stripEncryptedOutputParts,
 } from "~/services/copilot/encrypted-output-recovery"
-import { validateResponsesCapabilities } from "~/services/copilot/responses-capabilities"
+import {
+  sanitizeGpt6Payload,
+  validateResponsesCapabilities,
+} from "~/services/copilot/responses-capabilities"
+import {
+  normalizeResponsesStreamIdentity,
+  restoreResponsesReplayIds,
+} from "~/services/copilot/responses-stream-identity"
 
 /**
  * Bytes per token for Responses payloads, used only when opt-in token-derived
@@ -85,7 +92,9 @@ export async function createResponses(
     state.githubToken ?? state.copilotToken,
   )
   const knownRejected = stripEncryptedOutputParts(
-    sanitizeResponsesPayload(payload),
+    sanitizeResponsesPayload(
+      restoreResponsesReplayIds(payload, encryptedOutputScope),
+    ),
     (fingerprint) =>
       isRejectedEncryptedOutput(encryptedOutputScope, fingerprint),
   )
@@ -139,7 +148,11 @@ export async function createResponses(
     )
   }
 
-  return wrapCancellableResponse(response, cancellation)
+  const normalized = normalizeResponsesStreamIdentity(
+    response,
+    encryptedOutputScope,
+  )
+  return wrapCancellableResponse(normalized, cancellation)
 }
 
 interface ResponsesFetchResult {
@@ -683,12 +696,9 @@ function sanitizeResponsesPayload(
   )
 
   // Codex sends ChatGPT-only fast mode metadata; Copilot Responses rejects it.
-  delete (sanitized as ResponsesApiRequest & { service_tier?: unknown })
-    .service_tier
+  delete sanitized.service_tier
 
-  if (requiresGpt6ResponsesSanitization(sanitized.model)) {
-    sanitized = sanitizeGpt6Payload(sanitized)
-  }
+  sanitized = sanitizeGpt6Payload(sanitized)
 
   if (!sanitized.tools?.some((tool) => tool.type === "image_generation")) {
     return sanitized
@@ -698,29 +708,6 @@ function sanitizeResponsesPayload(
     ...sanitized,
     tools: sanitized.tools.filter((tool) => tool.type !== "image_generation"),
   }
-}
-
-function requiresGpt6ResponsesSanitization(modelId: string): boolean {
-  return modelId === "gpt-6-astra" || modelId === "gpt-6.1-sol"
-}
-
-function sanitizeGpt6Payload(
-  payload: ResponsesApiRequest,
-): ResponsesApiRequest {
-  const sanitized = { ...payload }
-  delete sanitized.temperature
-  delete sanitized.top_p
-  delete (sanitized as ResponsesApiRequest & { top_logprobs?: unknown })
-    .top_logprobs
-  delete (sanitized as ResponsesApiRequest & { logprobs?: unknown }).logprobs
-
-  if (sanitized.include?.includes("message.output_text.logprobs")) {
-    sanitized.include = sanitized.include.filter(
-      (item) => item !== "message.output_text.logprobs",
-    )
-  }
-
-  return sanitized
 }
 
 function normalizeToolDescriptions(
