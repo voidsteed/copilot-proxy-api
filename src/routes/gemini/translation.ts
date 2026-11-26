@@ -1,3 +1,5 @@
+import consola from "consola"
+
 import type {
   ChatCompletionsPayload,
   ContentPart,
@@ -6,6 +8,7 @@ import type {
 } from "~/services/copilot/create-chat-completions"
 import type { Model } from "~/services/copilot/get-models"
 
+import { sanitizeLogText } from "~/lib/client-info"
 import { TOOL_IMAGE_HEADER } from "~/lib/context-manager"
 import { HTTPError } from "~/lib/error"
 
@@ -536,31 +539,33 @@ export function translateRequest(
   }
 }
 
+const FINISH_REASONS = new Map<string, string>([
+  ["stop", "STOP"],
+  ["tool_calls", "STOP"],
+  ["function_call", "STOP"],
+  ["length", "MAX_TOKENS"],
+  ["max_tokens", "MAX_TOKENS"],
+  ["content_filter", "SAFETY"],
+  ["safety", "SAFETY"],
+  ["refusal", "SAFETY"],
+  ["recitation", "RECITATION"],
+  ["malformed_function_call", "MALFORMED_FUNCTION_CALL"],
+  ["other", "OTHER"],
+])
+
 export function finishReason(
   reason: string | null | undefined,
 ): string | undefined {
-  switch (reason) {
-    case "stop":
-    case "tool_calls": {
-      return "STOP"
-    }
-    case "length": {
-      return "MAX_TOKENS"
-    }
-    case "content_filter": {
-      return "SAFETY"
-    }
-    case null:
-    case undefined: {
-      return undefined
-    }
-    default: {
-      throw new GeminiError(
-        "Upstream returned an unsupported finish reason",
-        502,
-      )
-    }
-  }
+  if (reason === null || reason === undefined) return undefined
+  const normalized = reason.trim().toLowerCase()
+  if (!normalized || normalized === "finish_reason_unspecified")
+    return undefined
+  const mapped = FINISH_REASONS.get(normalized)
+  if (mapped !== undefined) return mapped
+  consola.warn(
+    `Unsupported upstream Gemini finish_reason: ${sanitizeLogText(reason, 64)}`,
+  )
+  throw new GeminiError("Upstream returned an unsupported finish reason", 502)
 }
 export function usageMetadata(usage: UpstreamResponse["usage"]) {
   if (!usage) return undefined

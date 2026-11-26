@@ -12,6 +12,31 @@ afterEach(() => {
   state.models = undefined
 })
 
+function requestWithRawHeaders(
+  url: string,
+  headers: Record<string, string>,
+  init?: Omit<RequestInit, "headers">,
+): Request {
+  const request = new Request(url, init)
+  const map = new Map<string, string>(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
+  )
+  Object.defineProperty(request, "headers", {
+    value: {
+      get: (name: string) => map.get(name.toLowerCase()) ?? null,
+      has: (name: string) => map.has(name.toLowerCase()),
+      forEach: (callback: (value: string, key: string) => void) => {
+        for (const [key, value] of map) callback(value, key)
+      },
+      entries: () => map.entries(),
+      keys: () => map.keys(),
+      values: () => map.values(),
+      [Symbol.iterator]: () => map.entries(),
+    },
+  })
+  return request
+}
+
 function setModel(model: string, contextLimit = 1_000_000): void {
   state.models = {
     object: "list",
@@ -297,6 +322,131 @@ describe("requestLogMiddleware hardening", () => {
   })
 })
 
+describe("requestLogMiddleware client metadata", () => {
+  test("logs sanitized client metadata on 4xx and 5xx responses but omits it on clean 200 responses", async () => {
+    const logs: Array<string> = []
+    const app = new Hono()
+    app.use(createRequestLogMiddleware((line) => logs.push(line)))
+    app.post("/v1/chat/completions", (c) => {
+      const statusParam = c.req.query("status")
+      if (statusParam === "400")
+        return c.json({ error: { message: "bad request" } }, 400)
+      if (statusParam === "502")
+        return c.json({ error: { message: "bad gateway" } }, 502)
+      return c.json({ id: "ok" })
+    })
+
+    const headers = {
+      "user-agent": "python-urllib/3.12",
+      "x-forwarded-for": "100.64.225.91",
+    }
+
+    await (
+      await app.request("/v1/chat/completions?status=400", {
+        method: "POST",
+        headers,
+      })
+    ).text()
+    await (
+      await app.request("/v1/chat/completions?status=502", {
+        method: "POST",
+        headers,
+      })
+    ).text()
+    await (
+      await app.request("/v1/chat/completions", {
+        method: "POST",
+        headers,
+      })
+    ).text()
+
+    expect(logs).toHaveLength(3)
+    for (const errorLine of [
+      stripAnsi(logs[0] ?? ""),
+      stripAnsi(logs[1] ?? ""),
+    ]) {
+      expect(errorLine).toContain("python-urllib/3.12")
+      expect(errorLine).toContain("100.64.225.91")
+    }
+
+    const okLine = stripAnsi(logs[2] ?? "")
+    expect(okLine).toContain("200")
+    expect(okLine).not.toContain("client ")
+    expect(okLine).not.toContain("python-urllib/3.12")
+    expect(okLine).not.toContain("100.64.225.91")
+  })
+
+  test("control characters and terminal escapes in client headers cannot forge lines or inject ESC sequences", async () => {
+    const logs: Array<string> = []
+    const escape = String.fromCodePoint(27)
+    const app = new Hono()
+    app.use(createRequestLogMiddleware((line) => logs.push(line)))
+    app.post("/v1/chat/completions", (c) =>
+      c.json({ error: { message: "bad request" } }, 400),
+    )
+
+    await (
+      await app.fetch(
+        requestWithRawHeaders(
+          "http://localhost/v1/chat/completions",
+          {
+            "user-agent": `BadClient\nFORGED${escape}[2J`,
+            "x-forwarded-for": `100.64.225.91\r${escape}[31m`,
+          },
+          { method: "POST" },
+        ),
+      )
+    ).text()
+
+    await (
+      await app.fetch(
+        requestWithRawHeaders(
+          "http://localhost/v1/chat/completions",
+          {
+            origin: `http://evil.test\r\nFORGED${escape}[2J`,
+          },
+          { method: "POST" },
+        ),
+      )
+    ).text()
+
+    await (
+      await app.fetch(
+        requestWithRawHeaders(
+          "http://localhost/v1/chat/completions",
+          {
+            "x-forwarded-for": `100.64.225.91\r\nFORGED${escape}[2J`,
+          },
+          { method: "POST" },
+        ),
+      )
+    ).text()
+
+    expect(logs).toHaveLength(3)
+
+    const uaRaw = logs[0] ?? ""
+    const uaLine = stripAnsi(uaRaw)
+    expect(uaLine).toContain("BadClient")
+    expect(uaLine).not.toContain("\n")
+    expect(uaLine).not.toContain("\r")
+    expect(uaRaw).not.toContain(`${escape}[2J`)
+    expect(uaRaw).not.toContain(`${escape}[31m`)
+
+    const originRaw = logs[1] ?? ""
+    const originLine = stripAnsi(originRaw)
+    expect(originLine).toContain("evil.test")
+    expect(originLine).not.toContain("\n")
+    expect(originLine).not.toContain("\r")
+    expect(originRaw).not.toContain(`${escape}[2J`)
+
+    const ipRaw = logs[2] ?? ""
+    const ipLine = stripAnsi(ipRaw)
+    expect(ipLine).not.toContain("\n")
+    expect(ipLine).not.toContain("\r")
+    expect(ipRaw).not.toContain(`${escape}[2J`)
+  })
+})
+
 describe("requestLogMiddleware Gemini SSE", () => {
   test.each([
     "/v1beta/models/gemini-4-neon:streamGenerateContent",
@@ -358,4 +508,94 @@ describe("requestLogMiddleware Gemini SSE", () => {
       )
     },
   )
+
+  test("logs Gemini SSE in-band error code and status without leaking the error message", async () => {
+    setModel("gemini-4-neon")
+    const logs: Array<string> = []
+    const app = new Hono()
+    app.use(createRequestLogMiddleware((line) => logs.push(line)))
+    app.post("/v1beta/models/gemini-4-neon:streamGenerateContent", (c) => {
+      setRequestLogMetadata(c, { model: "gemini-4-neon", effort: "xhigh" })
+      const body = `data: ${JSON.stringify({
+        error: { code: 502, status: "UNAVAILABLE", message: "PRIVATE" },
+      })}\n\n`
+      return new Response(body, {
+        headers: { "content-type": "text/event-stream" },
+      })
+    })
+
+    await (
+      await app.request(
+        "/v1beta/models/gemini-4-neon:streamGenerateContent?alt=sse",
+        { method: "POST" },
+      )
+    ).text()
+
+    expect(logs).toHaveLength(1)
+    const line = stripAnsi(logs[0] ?? "")
+    expect(line).toContain("Response stream failed (502 UNAVAILABLE)")
+    expect(line).not.toContain("PRIVATE")
+  })
+
+  test("logs client metadata on 200 Gemini SSE error, supports %3A paths, and rejects blank finishReason as terminal", async () => {
+    setModel("gemini-4-neon")
+    const logs: Array<string> = []
+    const app = new Hono()
+    app.use(createRequestLogMiddleware((line) => logs.push(line)))
+    app.post("/v1beta/models/:model", (c) => {
+      setRequestLogMetadata(c, { model: "gemini-4-neon", effort: "high" })
+      const body =
+        c.req.query("mode") === "blank-finish" ?
+          `data: ${JSON.stringify({
+            candidates: [
+              {
+                index: 0,
+                content: { role: "model", parts: [{ text: "partial" }] },
+                finishReason: "",
+              },
+            ],
+          })}\n\n`
+        : `data: ${JSON.stringify({
+            error: { code: 502, status: "UNAVAILABLE", message: "SECRET" },
+          })}\n\n`
+      return new Response(body, {
+        headers: { "content-type": "text/event-stream" },
+      })
+    })
+
+    await (
+      await app.request(
+        "/v1beta/models/gemini-4-neon%3AstreamGenerateContent?alt=sse",
+        {
+          method: "POST",
+          headers: {
+            "user-agent": "AgyClient/1.5",
+            "x-forwarded-for": "100.64.225.91",
+          },
+        },
+      )
+    ).text()
+    await (
+      await app.request(
+        "/v1beta/models/gemini-4-neon%3AstreamGenerateContent?alt=sse&mode=blank-finish",
+        {
+          method: "POST",
+          headers: { "user-agent": "AgyClient/1.5" },
+        },
+      )
+    ).text()
+
+    expect(logs).toHaveLength(2)
+    const errLine = stripAnsi(logs[0] ?? "")
+    expect(errLine).toContain("Response stream failed (502 UNAVAILABLE)")
+    expect(errLine).toContain("AgyClient/1.5")
+    expect(errLine).toContain("100.64.225.91")
+    expect(errLine).not.toContain("SECRET")
+
+    const truncatedLine = stripAnsi(logs[1] ?? "")
+    expect(truncatedLine).toContain(
+      "Gemini stream closed before a terminal event",
+    )
+    expect(truncatedLine).toContain("AgyClient/1.5")
+  })
 })

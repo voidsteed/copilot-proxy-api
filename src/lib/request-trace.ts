@@ -2,6 +2,8 @@ import type { MiddlewareHandler } from "hono"
 
 import { randomUUID } from "node:crypto"
 
+import { extractRequestClientInfo, type RequestClientInfo } from "./client-info"
+
 const MAX_REQUEST_TRACES = 100
 
 export interface RequestTrace {
@@ -13,6 +15,7 @@ export interface RequestTrace {
   durationMs: number
   startedAt: string
   error?: string
+  client?: RequestClientInfo
 }
 
 const requestTraces: Array<RequestTrace> = []
@@ -43,6 +46,7 @@ export function clearRequestTraces(): void {
 export const requestTraceMiddleware: MiddlewareHandler = async (c, next) => {
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
+  const client = extractRequestClientInfo(c)
   const requestId =
     c.req.header("x-client-request-id")
     ?? c.req.header("x-request-id")
@@ -72,6 +76,7 @@ export const requestTraceMiddleware: MiddlewareHandler = async (c, next) => {
       durationMs: Date.now() - startedAtMs,
       startedAt,
       error,
+      ...(client ? { client } : {}),
     })
   }
 }
