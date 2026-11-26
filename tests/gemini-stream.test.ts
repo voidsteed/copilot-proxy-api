@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
+import consola from "consola"
 
 import type { Model } from "~/services/copilot/get-models"
 
@@ -7,6 +8,7 @@ import { server } from "~/server"
 
 const originalFetch = globalThis.fetch
 const encoder = new TextEncoder()
+let warnSpy: ReturnType<typeof spyOn<typeof consola, "warn">> | undefined
 const model: Model = {
   id: "gemini-3.8-flash",
   name: "Flash",
@@ -40,6 +42,8 @@ beforeEach(() => {
   state.rateLimitSeconds = undefined
 })
 afterEach(() => {
+  warnSpy?.mockRestore()
+  warnSpy = undefined
   globalThis.fetch = originalFetch
   state.models = undefined
   state.localApiKeys = []
@@ -471,4 +475,93 @@ test("malformed JSON in upstream SSE emits a 502 Gemini error event", async () =
       message: "Invalid upstream stream event",
     },
   })
+})
+
+test("ignores empty string finish_reason on non-terminal chunks", async () => {
+  const body =
+    event({ content: "hello " }, "")
+    + event({ content: "world" }, "")
+    + event({}, "stop")
+    + "data: [DONE]\n\n"
+  streamFetch(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(body))
+        controller.close()
+      },
+    }),
+  )
+  const response = await generate()
+  expect(response.status).toBe(200)
+  const text = await response.text()
+  expect(text).toContain('"text":"hello "')
+  expect(text).toContain('"text":"world"')
+  expect(decodeEvents(text).at(-1)).toMatchObject({
+    candidates: [{ finishReason: "STOP" }],
+  })
+})
+
+test("maps additional valid upstream finish_reason values to Gemini finishReason", async () => {
+  for (const [upstream, expected] of [
+    ["function_call", "STOP"],
+    ["recitation", "RECITATION"],
+    ["malformed_function_call", "MALFORMED_FUNCTION_CALL"],
+    ["refusal", "SAFETY"],
+    ["other", "OTHER"],
+    ["MAX_TOKENS", "MAX_TOKENS"],
+  ]) {
+    streamFetch(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              event({ content: "ok" }, upstream) + "data: [DONE]\n\n",
+            ),
+          )
+          controller.close()
+        },
+      }),
+    )
+    const response = await generate()
+    expect(response.status).toBe(200)
+    expect(decodeEvents(await response.text()).at(-1)).toMatchObject({
+      candidates: [{ finishReason: expected }],
+    })
+  }
+})
+
+test("unsupported finish_reason emits a 502 SSE error without leaking it and warns server-side", async () => {
+  warnSpy = spyOn(consola, "warn").mockImplementation(
+    Object.assign(() => undefined, { raw: () => undefined }),
+  )
+  streamFetch(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            event({ content: "partial" }, "unexpected_reason")
+              + "data: [DONE]\n\n",
+          ),
+        )
+        controller.close()
+      },
+    }),
+  )
+  const response = await generate()
+  expect(response.status).toBe(200)
+  const rawBody = await response.text()
+  expect(rawBody).not.toContain("unexpected_reason")
+  expect(decodeEvents(rawBody).at(-1)).toEqual({
+    error: {
+      code: 502,
+      status: "UNAVAILABLE",
+      message: "Upstream returned an unsupported finish reason",
+    },
+  })
+  expect(warnSpy).toHaveBeenCalled()
+  const warningText = warnSpy.mock.calls
+    .flat()
+    .map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+    .join(" ")
+  expect(warningText).toContain("unexpected_reason")
 })
