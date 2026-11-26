@@ -1,11 +1,18 @@
-import { afterEach, test, expect, mock } from "bun:test"
+import { afterEach, expect, mock, spyOn, test } from "bun:test"
 
 import type { ChatCompletionsPayload } from "../src/services/copilot/create-chat-completions"
 
+import { HTTPError } from "../src/lib/error"
+import { PromptTooLongError } from "../src/lib/prompt-too-long"
 import { state } from "../src/lib/state"
+import * as utils from "../src/lib/utils"
 import { createChatCompletions } from "../src/services/copilot/create-chat-completions"
 
+const originalFetch = globalThis.fetch
+
 afterEach(() => {
+  globalThis.fetch = originalFetch
+  state.models = undefined
   mock.restore()
 })
 
@@ -139,4 +146,101 @@ test("retries transient upstream 499 responses", async () => {
 
   expect(response).toMatchObject({ id: "123" })
   expect(fetchMock).toHaveBeenCalledTimes(2)
+})
+
+test("does not misclassify a 503 outage on a 2.5 MB payload as PromptTooLongError", async () => {
+  spyOn(utils, "sleep").mockResolvedValue(undefined)
+  const fetchMock = mock(
+    () =>
+      new Response("Service Unavailable", {
+        status: 503,
+        statusText: "Service Unavailable",
+      }),
+  )
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const error = await createChatCompletions({
+    messages: [{ role: "user", content: "x".repeat(2_500_000) }],
+    model: "gemini-4-neon",
+  }).catch((caught: unknown) => caught)
+
+  expect(error).toBeInstanceOf(HTTPError)
+  expect(error).not.toBeInstanceOf(PromptTooLongError)
+  if (error instanceof HTTPError) {
+    expect(error.response.status).toBe(503)
+  }
+})
+
+test("parses upstream-reported token counts from model_max_prompt_tokens_exceeded and Gemini token-limit errors", async () => {
+  const upstreamErrorBodies = [
+    {
+      error: {
+        code: "model_max_prompt_tokens_exceeded",
+        message: "prompt token count of 1050000 exceeds the limit of 983040",
+      },
+    },
+    {
+      error: {
+        message:
+          "input token count (1050000) exceeds the maximum number of tokens allowed (983040)",
+      },
+    },
+  ]
+
+  for (const body of upstreamErrorBodies) {
+    globalThis.fetch = mock(() =>
+      Response.json(body, { status: 400 }),
+    ) as unknown as typeof fetch
+
+    const error = await createChatCompletions({
+      messages: [{ role: "user", content: "hello" }],
+      model: "gemini-4-neon",
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(PromptTooLongError)
+    if (error instanceof PromptTooLongError) {
+      expect(error.estimatedTokens).toBe(1_050_000)
+      expect(error.modelLimit).toBe(983_040)
+    }
+  }
+})
+
+test("enforces 5 MB UTF-8 wire ceiling before fetch and omits Copilot-Vision-Request when all images are stripped", async () => {
+  const fetchMock = mockSuccessfulFetch()
+
+  await createChatCompletions({
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "漢".repeat(1_500_000) },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:image/png;base64,${"A".repeat(800_000)}`,
+            },
+          },
+        ],
+      },
+    ],
+    model: "gemini-4-neon",
+  })
+
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  const callInit = fetchMock.mock.calls[0][1] as {
+    body: string
+    headers: Record<string, string>
+  }
+  expect(Buffer.byteLength(callInit.body, "utf8")).toBeLessThanOrEqual(
+    5_000_000,
+  )
+
+  const sentPayload = JSON.parse(callInit.body) as ChatCompletionsPayload
+  const hasRemainingImage = sentPayload.messages.some(
+    (msg) =>
+      Array.isArray(msg.content)
+      && msg.content.some((part) => part.type === "image_url"),
+  )
+  expect(hasRemainingImage).toBe(false)
+  expect(new Headers(callInit.headers).get("copilot-vision-request")).toBeNull()
 })
