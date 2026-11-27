@@ -4,6 +4,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUST_DIR="$REPO_ROOT/desktop-rust"
 VERSION="${COPILOT_PROXY_DESKTOP_VERSION:-0.0.8}"
+BUILD_NUMBER="$(printf '%s' "${VERSION##*.}" | tr -cd '0-9')"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
 ARCH="$(uname -m)"
 if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
   ARCH_LABEL="arm64"
@@ -14,8 +16,8 @@ fi
 if [ -n "${COPILOT_PROXY_PACKAGE_OUTPUT:-}" ]; then
   OUT_ROOT="$COPILOT_PROXY_PACKAGE_OUTPUT"
   TARGET_DIR="${CARGO_TARGET_DIR:-$OUT_ROOT/target}"
-elif [ -x /Users/yujunliu/.local/bin/ai-storage ] && [ -d /Volumes/mac-ssd ]; then
-  STORAGE_ROOT="$(cd "$REPO_ROOT" && /Users/yujunliu/.local/bin/ai-storage path)"
+elif command -v ai-storage >/dev/null 2>&1 && [ -d /Volumes/mac-ssd ]; then
+  STORAGE_ROOT="$(cd "$REPO_ROOT" && ai-storage path)"
   RUST_ROOT="$STORAGE_ROOT/rust"
   export RUSTUP_HOME="${RUSTUP_HOME:-$RUST_ROOT/rustup}"
   export CARGO_HOME="${CARGO_HOME:-$RUST_ROOT/cargo}"
@@ -81,7 +83,7 @@ cat > "$APP_OUT/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key>
   <string>${VERSION}</string>
   <key>CFBundleVersion</key>
-  <string>8</string>
+  <string>${BUILD_NUMBER}</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>

@@ -33,7 +33,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -64,10 +64,11 @@ jobs:
         env:
           COPILOT_PROXY_PACKAGE_OUTPUT: ${{ runner.temp }}/copilot-proxy-rust-package
           CARGO_TARGET_DIR: ${{ github.workspace }}/desktop-rust/target
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           TAG_NAME="${GITHUB_REF_NAME}"
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
-            TAG_NAME="${{ inputs.tag }}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${INPUT_TAG}" ]; then
+            TAG_NAME="${INPUT_TAG}"
           fi
           if [[ "$TAG_NAME" == desktop-v* ]]; then
             export COPILOT_PROXY_DESKTOP_VERSION="${TAG_NAME#desktop-v}"
@@ -82,20 +83,33 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  publish-release:
+    name: Publish macOS desktop release
+    needs: test-and-package-macos
+    if: startsWith(github.ref, 'refs/tags/desktop-v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: copilot-proxy-rust-macos-arm64
+          path: release-artifacts
+
       - name: Publish GitHub Release assets
-        if: startsWith(github.ref, 'refs/tags/desktop-v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG_NAME="${GITHUB_REF_NAME}"
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            TAG_NAME="${{ inputs.tag }}"
+            TAG_NAME="${INPUT_TAG}"
           fi
-          RELEASE_DIR="${{ runner.temp }}/copilot-proxy-rust-package/release-artifacts"
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" "$RELEASE_DIR"/* --clobber
+            gh release upload "$TAG_NAME" release-artifacts/* --clobber
           else
-            gh release create "$TAG_NAME" "$RELEASE_DIR"/* \
+            gh release create "$TAG_NAME" release-artifacts/* \
               --title "Copilot Proxy Desktop ${TAG_NAME#desktop-v}" \
               --generate-notes
           fi

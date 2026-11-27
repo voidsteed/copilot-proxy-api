@@ -154,7 +154,7 @@ fn apply_macos_launch_agent(enabled: bool) -> Result<(), String> {
         }
         let exe = std::env::current_exe()
             .map_err(|err| format!("Could not resolve app path: {err}"))?;
-        let exe_str = exe.to_string_lossy();
+        let exe_str = escape_xml(&exe.to_string_lossy());
         std::fs::create_dir_all(&agents_dir)
             .map_err(|err| format!("Could not prepare LaunchAgents folder: {err}"))?;
         let plist = format!(
@@ -184,6 +184,21 @@ fn apply_macos_launch_agent(enabled: bool) -> Result<(), String> {
         let _ = enabled;
         Ok(())
     }
+}
+
+fn escape_xml(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 #[cfg(target_os = "macos")]

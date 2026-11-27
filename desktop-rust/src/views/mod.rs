@@ -466,10 +466,7 @@ pub fn format_timestamp_short(iso: &str) -> String {
             .split(['.', 'Z', '+'])
             .next()
             .unwrap_or(time_part);
-        if clean.len() >= 8 {
-            return clean[..8].to_string();
-        }
-        return clean.to_string();
+        return clean.chars().take(8).collect();
     }
     iso.to_string()
 }
@@ -484,11 +481,17 @@ fn parse_utc_iso_timestamp(iso: &str) -> Option<(i32, u32, u32, u32, u32, u32)> 
     let y: i32 = d_parts.next()?.parse().ok()?;
     let mo: u32 = d_parts.next()?.parse().ok()?;
     let d: u32 = d_parts.next()?.parse().ok()?;
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+        return None;
+    }
     let time_no_frac = time_raw.split('.').next()?;
     let mut t_parts = time_no_frac.split(':');
     let h: u32 = t_parts.next()?.parse().ok()?;
     let mi: u32 = t_parts.next()?.parse().ok()?;
     let s: u32 = t_parts.next()?.parse().ok()?;
+    if h >= 24 || mi >= 60 || s >= 60 {
+        return None;
+    }
     Some((y, mo, d, h, mi, s))
 }
 
