@@ -15,13 +15,19 @@ import type {
 } from "./proxy-contracts"
 
 import { inspectAgentConfigs } from "./agent-config"
-import { discoverLegacySession, legacyIntentCompatible } from "./legacy-proxy"
+import { discoverLegacySession } from "./legacy-proxy"
 import {
   agentModelChoicesSchema,
   nativeCredentialProvenanceSchema,
   nativeIntentSchema,
   runtimeOptionsSchema,
 } from "./proxy-contracts"
+import {
+  attachCreatorLifecycle,
+  canFallBackToStandalone,
+  resolveBrokerLegacySnapshot,
+  resolveDirectLegacySession,
+} from "./proxy-session-legacy"
 import {
   acceptProxyClient,
   assertPrivateRegularFile,
@@ -541,6 +547,8 @@ async function discoverSession(
       },
     )
     if (directory) {
+      const active = await activeNative(directory)
+      if (active) return active
       const registered = await optionalJson(
         path.join(directory, "installation.json"),
       )
@@ -548,8 +556,6 @@ async function discoverSession(
         registered === undefined ? null : (
           await validatedInstallation(registered)
         )
-      const active = await activeNative(directory)
-      if (active) return active
       if (installation) return await wakeNative(installation, directory)
       const provenance = await optionalJson(
         path.join(directory, "credential-provenance.json"),
@@ -594,41 +600,35 @@ export async function openProxySession(
   if (session.kind === "standalone" || session.kind === "unavailable")
     return session
   try {
-    const snapshot = await session.read()
-    if (snapshot.kind === "legacy") {
-      if (await legacyIntentCompatible(intent, snapshot)) return session
-      await session.release()
-      return {
-        kind: "unavailable",
-        message:
-          "The existing CLI is read-only. Stop it normally before changing its account or runtime through Copilot Proxy.",
-      }
-    }
-    if (session.kind !== "managed") return session
+    if (session.kind === "legacy")
+      return await resolveDirectLegacySession(session, intent)
     const result = await session.invoke(intent)
     if (result.kind === "applied") {
-      const lease = result.createdGateway
-      if (!lease) return session
-      return {
-        ...session,
-        lifecycle: {
-          kind: "creator",
-          lease,
-          stopCreatedGateway: () =>
-            session.invoke({
-              kind: "stop-gateway",
-              expected: lease,
-              timeoutMs: 15_000,
-            }),
-        },
-      }
+      return result.createdGateway ?
+          attachCreatorLifecycle(session, result.createdGateway)
+        : session
     }
     if (
       result.kind === "session-changed"
       && result.snapshot.kind === "legacy"
-      && (await legacyIntentCompatible(intent, result.snapshot))
-    )
-      return session
+    ) {
+      return await resolveBrokerLegacySnapshot({
+        session,
+        intent,
+        snapshot: result.snapshot,
+      })
+    }
+    if (
+      result.kind === "unavailable"
+      && (await canFallBackToStandalone({
+        stateDirectory: options.stateDirectory,
+        intent,
+        session,
+      }))
+    ) {
+      await session.release()
+      return { kind: "standalone" }
+    }
     await session.release()
     return {
       kind: "unavailable",

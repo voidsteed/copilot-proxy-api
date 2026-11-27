@@ -184,10 +184,6 @@ impl AppState {
         if should_reset {
             self.settings_draft = snapshot.settings.clone();
             self.port_input = snapshot.settings.port.to_string();
-        } else if snapshot.source.is_legacy_cli() {
-            self.settings_draft.port = snapshot.settings.port;
-            self.settings_draft.account_type = snapshot.settings.account_type;
-            self.port_input = snapshot.settings.port.to_string();
         }
         self.settings_synced_revision = Some(snapshot.revision);
     }
@@ -211,13 +207,14 @@ impl AppState {
             .map(|s| s.source.is_legacy_cli())
             .unwrap_or(false);
         let d = &self.settings_draft;
+        let port_changed = self.port_input.trim() != saved.port.to_string();
         d.theme != saved.theme
             || d.shell != saved.shell
             || d.launch_at_login != saved.launch_at_login
             || d.start_on_launch != saved.start_on_launch
             || d.close_to_tray != saved.close_to_tray
-            || (!external
-                && (self.parsed_port() != Some(saved.port) || d.account_type != saved.account_type))
+            || port_changed
+            || (!external && d.account_type != saved.account_type)
     }
 
     pub fn authorization_active(&self) -> bool {
@@ -1100,4 +1097,127 @@ fn view_sign_in_modal<'a>(
         .center_y(Length::Fill)
         .style(theme::modal_backdrop_style(p))
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contracts::{ProxySource, ProxyTotals};
+    use std::path::PathBuf;
+
+    fn sample_snapshot(port: u16, revision: u64, legacy: bool) -> DesktopSnapshot {
+        let mut settings = DesktopSettings::default();
+        settings.port = port;
+        DesktopSnapshot {
+            session_id: "test-session".to_string(),
+            revision,
+            version: "0.0.8".to_string(),
+            platform: "darwin".to_string(),
+            fixture: false,
+            storage_mode: "encrypted".to_string(),
+            account: if legacy {
+                AccountState::ExternalUnverified
+            } else {
+                AccountState::SignedOut
+            },
+            authorization: AuthorizationState::Idle,
+            gateway: GatewayState::Stopped,
+            connection: None,
+            source: if legacy {
+                ProxySource::LegacyCli {
+                    status: "reachable".to_string(),
+                    observed_at: "2026-11-26T22:00:00Z".to_string(),
+                }
+            } else {
+                ProxySource::None
+            },
+            settings,
+            agent_configs: Vec::new(),
+            launch_agent_diagnostics: Vec::new(),
+            last_configure_result: None,
+            models: Vec::new(),
+            models_fetched_at: None,
+            usage: None,
+            activity: Vec::new(),
+            totals: ProxyTotals::default(),
+            probe: crate::contracts::ProbeState::Idle,
+            notice: None,
+        }
+    }
+
+    fn sample_state(snap: DesktopSnapshot) -> AppState {
+        let mut state = AppState {
+            window_id: None,
+            tray: None,
+            bridge: None,
+            bridge_config: BridgeConfig {
+                node_path: PathBuf::from("node"),
+                bridge_script: PathBuf::from("bridge.cjs"),
+                engine_script: PathBuf::from("engine.cjs"),
+                data_dir: PathBuf::from("/tmp"),
+                state_dir: None,
+                fixture_mode: true,
+                version: "0.0.8".to_string(),
+            },
+            bridge_restart_token: 0,
+            background_launch: false,
+            shutting_down: false,
+            system_dark: true,
+            snapshot: None,
+            fatal_error: None,
+            action_error: None,
+            toast: None,
+            page: Page::Settings,
+            next_command_id: 1,
+            pending: HashMap::new(),
+            pending_kinds: BTreeSet::new(),
+            test_panel_open: false,
+            probe_model_id: String::new(),
+            probe_prompt: String::new(),
+            agent_tab: AgentTarget::ClaudeCode,
+            http_model_id: String::new(),
+            model_query: String::new(),
+            model_vendor_filter: String::new(),
+            model_feature_filter: String::new(),
+            activity_model_filter: String::new(),
+            activity_outcome_filter: String::new(),
+            expanded_activity_key: None,
+            settings_draft: DesktopSettings::default(),
+            port_input: "4141".to_string(),
+            settings_synced_revision: None,
+            screenshot_plan: None,
+        };
+        state.sync_settings_from_snapshot(&snap);
+        state.snapshot = Some(snap);
+        state
+    }
+
+    #[test]
+    fn editing_port_in_legacy_cli_mode_marks_dirty_and_survives_poll_snapshots() {
+        let mut state = sample_state(sample_snapshot(4141, 1, true));
+        assert!(!state.is_settings_dirty());
+
+        state.port_input = "4142".to_string();
+        assert!(state.is_settings_dirty());
+        assert_eq!(state.parsed_port(), Some(4142));
+
+        let poll_snap = sample_snapshot(4141, 2, true);
+        state.sync_settings_from_snapshot(&poll_snap);
+        state.snapshot = Some(poll_snap);
+        assert_eq!(state.port_input, "4142");
+        assert!(state.is_settings_dirty());
+    }
+
+    #[test]
+    fn partial_port_typing_stays_dirty_while_invalid_and_does_not_reset() {
+        let mut state = sample_state(sample_snapshot(4141, 1, true));
+        state.port_input = "41".to_string();
+        assert!(state.is_settings_dirty());
+        assert_eq!(state.parsed_port(), None);
+
+        let poll_snap = sample_snapshot(4141, 2, true);
+        state.sync_settings_from_snapshot(&poll_snap);
+        state.snapshot = Some(poll_snap);
+        assert_eq!(state.port_input, "41");
+    }
 }

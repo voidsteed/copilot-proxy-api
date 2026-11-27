@@ -324,22 +324,32 @@ async function tryLegacyCandidate(
 }
 async function legacyCandidates(
   context: ControllerContext,
+  options?: { port?: number },
 ): Promise<Map<string, Array<NativeConnection>>> {
+  const pinnedPort =
+    options?.port
+    ?? (context.settingsStore.preferManagedPort() ?
+      context.session.runtime.port
+    : undefined)
   const configured = await configuredProxyConnections(context.homeDirectory)
   if (
-    context.options.homeDirectory !== undefined
+    pinnedPort !== undefined
+    || context.options.homeDirectory !== undefined
     || context.state.settings.port !== 4141
-  )
+  ) {
+    const port = pinnedPort ?? context.state.settings.port
     configured.push(
       nativeConnectionSchema.parse({
-        rootUrl: `http://localhost:${String(context.state.settings.port)}/`,
-        apiUrl: `http://localhost:${String(context.state.settings.port)}/v1`,
+        rootUrl: `http://localhost:${String(port)}/`,
+        apiUrl: `http://localhost:${String(port)}/v1`,
         authentication: { kind: "none" },
       }),
     )
+  }
   const endpoints = new Map<string, Array<NativeConnection>>()
   for (const connection of configured) {
     const port = normalizedPort(new URL(connection.rootUrl))
+    if (pinnedPort !== undefined && port !== String(pinnedPort)) continue
     const list = endpoints.get(port)
     if (list) list.push(connection)
     else endpoints.set(port, [connection])
@@ -377,12 +387,12 @@ async function legacyCandidates(
 }
 export function discoverLegacy(
   context: ControllerContext,
-  options?: { attempted?: Set<string> },
+  options?: { attempted?: Set<string>; port?: number },
 ): Promise<boolean> {
   if (context.session.legacy) return Promise.resolve(true)
   if (context.session.discovery) return context.session.discovery
   const task = (async () => {
-    const endpoints = await legacyCandidates(context)
+    const endpoints = await legacyCandidates(context, options)
     for (const candidates of endpoints.values())
       for (const connection of candidates) {
         const key = candidateKey(connection)

@@ -26,32 +26,41 @@ function printSharedUsage(usage: UsageView): void {
   )
 }
 
-export async function runCheckUsage(
-  options: { homeDirectory?: string; stateDirectory?: string } = {},
-): Promise<void> {
-  const context = await cliProxyOptions(options)
+async function runSharedUsage(
+  context: Awaited<ReturnType<typeof cliProxyOptions>>,
+): Promise<boolean> {
   const session = await observeProxySession(context)
   if (session.kind === "unavailable") throw new Error(session.message)
-  if (session.kind !== "standalone") {
-    try {
-      if (
-        session.kind === "managed"
-        && (await session.read()).kind === "managed"
-      ) {
-        const result = await session.invoke({ kind: "refresh" })
-        if (result.kind === "unavailable") throw new Error(result.message)
-      }
-      const snapshot = await session.read()
-      if (!snapshot.usage)
-        throw new Error(
-          "The shared proxy has no quota information. Sign in or refresh in Copilot Proxy.",
-        )
-      printSharedUsage(snapshot.usage)
-    } finally {
-      await session.release()
+  if (session.kind === "standalone") return false
+  try {
+    if (
+      session.kind === "managed"
+      && (await session.read()).kind === "managed"
+    ) {
+      const result = await session.invoke({ kind: "refresh" })
+      if (result.kind === "unavailable") throw new Error(result.message)
     }
-    return
+    const snapshot = await session.read()
+    if (!snapshot.usage)
+      throw new Error(
+        "The shared proxy has no quota information. Sign in or refresh in Copilot Proxy.",
+      )
+    printSharedUsage(snapshot.usage)
+  } finally {
+    await session.release()
   }
+  return true
+}
+
+export async function runCheckUsage(
+  options: {
+    homeDirectory?: string
+    stateDirectory?: string
+    shared?: boolean
+  } = {},
+): Promise<void> {
+  const context = await cliProxyOptions(options)
+  if (options.shared && (await runSharedUsage(context))) return
   requireDefaultStandaloneProfile(context.homeDirectory)
   await standaloneUsage()
 }
@@ -101,9 +110,16 @@ async function standaloneUsage(): Promise<void> {
 export const checkUsage = defineCommand({
   meta: {
     name: "check-usage",
-    description: "Show the active Copilot Proxy usage/quota information",
+    description: "Show current GitHub Copilot usage/quota information",
   },
-  run() {
-    return runCheckUsage()
+  args: {
+    shared: {
+      type: "boolean",
+      default: false,
+      description: "Read usage from the shared Copilot Proxy desktop session",
+    },
+  },
+  run({ args }) {
+    return runCheckUsage({ shared: args.shared })
   },
 })

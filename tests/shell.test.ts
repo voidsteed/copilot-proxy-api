@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { execFile } from "node:child_process"
+import { execFile, spawnSync } from "node:child_process"
 import { promisify } from "node:util"
 
 import { generateEnvScript } from "~/lib/shell"
@@ -27,7 +27,7 @@ for (const shell of ["sh", "bash", "zsh"] as const) {
 
 test.skipIf(process.platform !== "win32")(
   "native PowerShell launch instructions preserve literal metacharacters and quotes",
-  async () => {
+  () => {
     const value =
       "actual key ' \" \\ $(Write-Output injected) `Write-Output injected` $HOME; & | %PATH%\nsecond line"
     const script = generateEnvScript(
@@ -35,13 +35,27 @@ test.skipIf(process.platform !== "win32")(
       "[Console]::Write($env:COPILOT_PROXY_TEST_LITERAL)",
       "powershell",
     )
-    const result = await exec("powershell.exe", [
-      "-NoProfile",
-      "-Command",
-      script,
-    ])
+    const result = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-InputFormat",
+        "None",
+        "-Command",
+        script,
+      ],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 15_000,
+      },
+    )
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(0)
     expect(result.stdout).toBe(value)
   },
+  20_000,
 )
 
 test("PowerShell and cmd instructions quote literal values without percent expansion", () => {

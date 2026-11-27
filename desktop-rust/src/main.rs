@@ -706,17 +706,16 @@ fn update(state: &mut AppState, message: Message) -> Task<Message> {
                 .as_ref()
                 .map(|s| s.source.is_legacy_cli())
                 .unwrap_or(false);
-            let port = state.parsed_port();
-            if !external && port.is_none() {
+            let Some(port) = state.parsed_port() else {
                 return Task::none();
-            }
+            };
             let patch = DesktopSettingsPatch {
                 theme: Some(state.settings_draft.theme),
                 shell: Some(state.settings_draft.shell),
                 launch_at_login: Some(state.settings_draft.launch_at_login),
                 start_on_launch: Some(state.settings_draft.start_on_launch),
                 close_to_tray: Some(state.settings_draft.close_to_tray),
-                port: if external { None } else { port },
+                port: Some(port),
                 account_type: if external {
                     None
                 } else {

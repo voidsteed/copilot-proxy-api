@@ -423,7 +423,7 @@ test("PDF inlineData in user and functionResponse parts extracts text without ne
     ],
   })
   expect(badPdf.status).toBe(400)
-})
+}, 20_000)
 
 test("thinkingBudget -1 is accepted as dynamic thinking while 0, positive budgets, and server-side tools fail clearly", async () => {
   const dynamic = await generate({

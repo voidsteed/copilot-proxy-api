@@ -229,11 +229,12 @@ Copilot API now uses a subcommand structure with these main commands:
 
 ### Start Command Options
 
-The following command line options are available for the `start` command. When the desktop app is installed, `start` attaches to or wakes the shared proxy unless `--standalone` is set.
+The following command line options are available for the `start` command. By default, `start` runs the standalone CLI API server directly. Pass `--shared` to attach to or start the shared Copilot Proxy desktop gateway instead.
 
 | Option                   | Description                                                                   | Default    | Alias |
 | ------------------------ | ----------------------------------------------------------------------------- | ---------- | ----- |
-| --standalone             | Start a separate API server without attaching to the desktop proxy            | false      | none  |
+| --shared                 | Attach to or start the shared Copilot Proxy desktop gateway                   | false      | none  |
+| --standalone             | Start a standalone API server without attaching to the desktop proxy          | false      | none  |
 | --port                   | Port to listen on                                                             | 4141       | -p    |
 | --verbose                | Enable verbose logging                                                        | false      | -v    |
 | --account-type           | Account type to use (individual, business, enterprise)                        | individual | -a    |
@@ -249,10 +250,11 @@ The following command line options are available for the `start` command. When t
 
 ### Auth Command Options
 
-| Option       | Description               | Default | Alias |
-| ------------ | ------------------------- | ------- | ----- |
-| --verbose    | Enable verbose logging    | false   | -v    |
-| --show-token | Show GitHub token on auth | false   | none  |
+| Option       | Description                                        | Default | Alias |
+| ------------ | -------------------------------------------------- | ------- | ----- |
+| --shared     | Authorize the shared Copilot Proxy desktop account | false   | none  |
+| --verbose    | Enable verbose logging                             | false   | -v    |
+| --show-token | Show GitHub token on auth                          | false   | none  |
 
 ### Debug Command Options
 

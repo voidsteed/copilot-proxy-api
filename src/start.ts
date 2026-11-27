@@ -52,6 +52,7 @@ const runServerOptionsSchema = z.object({
   proxyEnv: z.boolean(),
   apiKey: z.string().max(64_000).optional(),
   responsesContextTrim: z.boolean(),
+  shared: z.boolean().optional(),
   standalone: z.boolean().optional(),
 })
 export type RunServerOptions = z.infer<typeof runServerOptionsSchema>
@@ -78,6 +79,8 @@ export function explicitCliRuntime(options: {
       "proxy-env": { type: "boolean" },
       "api-key": { type: "string" },
       "responses-context-trim": { type: "boolean" },
+      shared: { type: "boolean" },
+      standalone: { type: "boolean" },
     },
   })
   const supplied = (name: string) =>
@@ -311,7 +314,7 @@ export async function runStart(options: {
 }): Promise<void> {
   const values = runServerOptionsSchema.parse(options.values)
   const context = await cliProxyOptions(options)
-  if (values.standalone) {
+  if (values.standalone || !values.shared) {
     requireDefaultStandaloneProfile(context.homeDirectory)
     return runServer(values)
   }
@@ -340,6 +343,8 @@ export async function runStart(options: {
     consola.warn("Native credentials remain in Copilot Proxy storage.")
   try {
     const snapshot = await session.read()
+    if (snapshot.kind === "legacy" && snapshot.status === "unreachable")
+      throw new Error("The existing CLI proxy is no longer reachable.")
     let url: string | null = null
     if (snapshot.kind === "legacy") url = snapshot.connection.rootUrl
     else if (snapshot.gateway.kind === "running")
@@ -475,14 +480,20 @@ export async function runServer(options: RunServerOptions): Promise<void> {
 export const start = defineCommand({
   meta: {
     name: "start",
-    description: "Start or attach to the shared Copilot Proxy",
+    description: "Start the Copilot API server",
   },
   args: {
+    shared: {
+      type: "boolean",
+      default: false,
+      description:
+        "Attach to or start the shared Copilot Proxy desktop gateway",
+    },
     standalone: {
       type: "boolean",
       default: false,
       description:
-        "Start a separate API server without attaching to the desktop proxy",
+        "Start a standalone API server without attaching to the desktop proxy (default)",
     },
     port: {
       alias: "p",
@@ -559,6 +570,7 @@ export const start = defineCommand({
       rateLimitRaw === undefined ? undefined : Number(rateLimitRaw)
 
     const values = runServerOptionsSchema.parse({
+      shared: args.shared,
       standalone: args.standalone,
       port: Number(args.port),
       verbose: args.verbose,

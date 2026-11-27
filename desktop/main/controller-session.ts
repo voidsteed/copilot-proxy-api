@@ -541,7 +541,8 @@ export async function reconcile(
       return null
     }
     if (context.session.owned) return null
-    if (await discoverLegacy(context)) return null
+    if (await discoverLegacy(context, { port: context.session.runtime.port }))
+      return null
     const result = await startOwnedGateway(context)
     if (result.kind === "settled") return result.createdGateway
   }
