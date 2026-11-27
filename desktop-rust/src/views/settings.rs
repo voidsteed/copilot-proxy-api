@@ -19,7 +19,8 @@ pub fn view<'a>(
 ) -> Element<'a, Message> {
     let external = snap.source.is_legacy_cli();
     let dirty = state.is_settings_dirty();
-    let valid_port = external || state.parsed_port().is_some();
+    let valid_port = state.parsed_port().is_some();
+    let can_save = dirty && valid_port && !state.is_pending("save-settings");
     let signed_in = matches!(snap.account, AccountState::SignedIn { .. });
     let keyed = snap.connection.as_ref().map(|c| c.is_keyed()).unwrap_or(false);
     let can_copy =
@@ -42,7 +43,7 @@ pub fn view<'a>(
             "Save changes"
         },
         Some(icons::CHECK),
-        if dirty && valid_port && !state.is_pending("save-settings") {
+        if can_save {
             Some(Message::SaveSettings)
         } else {
             None
@@ -148,17 +149,20 @@ pub fn view<'a>(
     .width(Length::Fill);
 
     // Card 2: Gateway
-    let mut port_col = column![
-        text_input("4141", &state.port_input)
-            .on_input(Message::SettingsPortChanged)
-            .width(Length::Fixed(104.0))
-            .padding([8, 12])
-            .size(13)
-            .font(mono_font())
-            .style(theme::input_style(p, !valid_port)),
-    ]
-    .spacing(4)
-    .align_x(Alignment::End);
+    let mut port_input_widget = text_input("4141", &state.port_input)
+        .on_input(Message::SettingsPortChanged)
+        .width(Length::Fixed(104.0))
+        .padding([8, 12])
+        .size(13)
+        .font(mono_font())
+        .style(theme::input_style(p, !valid_port));
+    if can_save {
+        port_input_widget = port_input_widget.on_submit(Message::SaveSettings);
+    }
+
+    let mut port_col = column![port_input_widget]
+        .spacing(4)
+        .align_x(Alignment::End);
 
     if !valid_port {
         port_col = port_col.push(
@@ -206,6 +210,15 @@ pub fn view<'a>(
     .spacing(8)
     .align_y(Alignment::Center);
 
+    let port_description = if external {
+        format!(
+            "Observing Terminal CLI on port {}. Enter another port and save to run Desktop on its own port.",
+            snap.settings.port
+        )
+    } else {
+        "Loopback listener bound strictly to 127.0.0.1.".to_string()
+    };
+
     let gateway_card = card(
         p,
         column![
@@ -214,11 +227,7 @@ pub fn view<'a>(
             setting_row(
                 p,
                 "Local port",
-                Some(if external {
-                    "Controlled by your running Terminal CLI."
-                } else {
-                    "Loopback listener bound strictly to 127.0.0.1."
-                }),
+                Some(port_description),
                 port_col.into(),
             ),
             hairline_h(p),
@@ -262,9 +271,12 @@ pub fn view<'a>(
                 .size(13.5)
                 .font(semibold_font())
                 .color(p.text),
-            text("Observing an active CLI proxy session on port 4141.")
-                .size(12)
-                .color(p.muted),
+            text(format!(
+                "Observing an active CLI proxy session on port {}.",
+                snap.settings.port
+            ))
+            .size(12)
+            .color(p.muted),
         ]
         .spacing(4)
         .into(),
@@ -282,7 +294,21 @@ pub fn view<'a>(
     };
 
     let account_action: Element<'a, Message> = if external {
-        status_pill(p, Tone::Neutral, "Managed in Terminal", false)
+        row![
+            status_pill(p, Tone::Neutral, "Managed in Terminal", false),
+            btn_secondary(
+                p,
+                "Disconnect CLI",
+                None,
+                Some(Message::RunCommand(
+                    DesktopCommand::DetachLegacy,
+                    Some("Disconnected from CLI proxy".to_string()),
+                )),
+            ),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into()
     } else if signed_in {
         btn_ghost(
             p,
@@ -391,12 +417,12 @@ fn section_heading<'a>(p: Palette, title: &'a str) -> Element<'a, Message> {
 fn setting_row<'a>(
     p: Palette,
     label: &'a str,
-    description: Option<&'a str>,
+    description: Option<impl Into<String>>,
     control: Element<'a, Message>,
 ) -> Element<'a, Message> {
     let mut left = column![text(label).size(13).font(medium_font()).color(p.text)].spacing(3);
     if let Some(desc) = description {
-        left = left.push(text(desc).size(11.5).color(p.muted));
+        left = left.push(text(desc.into()).size(11.5).color(p.muted));
     }
 
     container(

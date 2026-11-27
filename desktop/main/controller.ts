@@ -53,21 +53,17 @@ import {
   signOut,
 } from "./controller-account"
 import {
-  activateRuntime,
+  detachUnreachableLegacy,
+  readOnlyLegacyResult,
+  saveControllerSettings,
+} from "./controller-legacy"
+import {
   changeNativeGateway,
-  convergeGateway,
   createControllerSessionState,
-  drainReplacement,
-  isDisposed,
-  queueSettings,
   setGatewayDesired,
 } from "./controller-session"
 import { DEVICE_PAGE } from "./oauth"
-import {
-  createSettingsStore,
-  mergeSettingsPatch,
-  persistSettings,
-} from "./settings-store"
+import { createSettingsStore, mergeSettingsPatch } from "./settings-store"
 import {
   createNativeSnapshot,
   createNativeSource,
@@ -277,84 +273,14 @@ class Controller implements DesktopController {
     if (!this.context.session.disposed && launchId === this.launchInspection)
       this.publish({ launchAgentDiagnostics })
   }
-  private persistedSettings(settings: DesktopSettings): DesktopSettings {
-    if (!this.context.session.legacy) return settings
-    const options =
-      this.context.settingsStore.runtime()?.options
-      ?? this.context.session.runtime
-    return { ...settings, port: options.port, accountType: options.accountType }
-  }
   private saveSettings(
     change: (current: DesktopSettings) => DesktopSettings,
   ): Promise<CommandOutcome> {
-    return queueSettings(this.context, async () => {
-      if (isDisposed(this.context)) return CLOSED_OUTCOME
-      const displayedPrevious = this.context.state.settings
-      const displayedNext = change(displayedPrevious)
-      const restart =
-        displayedNext.port !== displayedPrevious.port
-        || displayedNext.accountType !== displayedPrevious.accountType
-      if (restart && this.context.session.legacy)
-        return this.reject(
-          "The CLI gateway's runtime settings are managed in Terminal.",
-        )
-      const previousRuntime = this.context.settingsStore.runtime()
-      const previous = this.persistedSettings(displayedPrevious)
-      const next = this.persistedSettings(displayedNext)
-      const saved = await persistSettings({
-        previous,
-        next,
-        applyLoginItem: this.context.options.applyLoginItem?.bind(
-          this.context.options,
-        ),
-        save: (settings) =>
-          this.context.settingsStore.save(
-            settings,
-            previousRuntime && !this.context.session.legacy ?
-              {
-                ...previousRuntime,
-                options: {
-                  ...previousRuntime.options,
-                  port: next.port,
-                  accountType: next.accountType,
-                },
-              }
-            : previousRuntime,
-          ),
-      })
-      if (saved.kind !== "saved") return this.reject(saved.message)
-      if (this.disposal) return CLOSED_OUTCOME
-      if (restart && !(await drainReplacement(this.context))) {
-        await persistSettings({
-          previous: next,
-          next: previous,
-          applyLoginItem: this.context.options.applyLoginItem?.bind(
-            this.context.options,
-          ),
-          save: (settings) =>
-            this.context.settingsStore.save(settings, previousRuntime),
-        }).catch(() => undefined)
-        return this.reject(
-          "The gateway is still serving an agent request. Its running configuration was preserved.",
-        )
-      }
-      if (isDisposed(this.context)) return CLOSED_OUTCOME
-      this.publish({ settings: displayedNext })
-      if (restart) {
-        activateRuntime(this.context, {
-          runtime: {
-            ...this.context.session.runtime,
-            port: next.port,
-            accountType: next.accountType,
-          },
-          authentication: this.context.session.authentication,
-        })
-        if (next.accountType !== previous.accountType)
-          await refresh(this.context, { allowLegacyDiscovery: false })
-        await convergeGateway(this.context)
-      }
-      await this.inspectConfigs()
-      return { kind: "ok" }
+    return saveControllerSettings({
+      context: this.context,
+      change,
+      isDisposing: () => this.disposal !== undefined,
+      reject: (message) => this.reject(message),
     })
   }
   private getModel(id: string): DesktopModel | undefined {
@@ -425,11 +351,8 @@ class Controller implements DesktopController {
     return { kind: "ok" }
   }
   private async handleStartGateway(): Promise<CommandOutcome> {
-    if (
-      this.context.session.legacy
-      && this.context.session.legacySnapshot?.status === "unreachable"
-    )
-      await detachLegacy(this.context, { restoreAccount: true })
+    if (this.context.session.legacy)
+      await detachUnreachableLegacy(this.context, { restoreAccount: true })
     if (this.context.session.legacy) return refresh(this.context)
     if (this.context.account.restoring) await this.context.account.restoring
     if (
@@ -608,11 +531,8 @@ class Controller implements DesktopController {
   ): Promise<CommandOutcome> {
     switch (command.kind) {
       case "sign-in": {
-        if (
-          this.context.session.legacy
-          && this.context.session.legacySnapshot?.status === "unreachable"
-        )
-          await detachLegacy(this.context, { restoreAccount: false })
+        if (this.context.session.legacy)
+          await detachUnreachableLegacy(this.context, { restoreAccount: false })
         return beginSignIn(this.context)
       }
       case "cancel-sign-in": {
@@ -726,14 +646,10 @@ class Controller implements DesktopController {
         : null,
     }
   }
-  private async readOnlyNativeResult(
+  private readOnlyNativeResult(
     intent: NativeIntent,
   ): Promise<ControlResult | null> {
-    if (this.context.session.legacy) {
-      if (intent.kind === "refresh") await refresh(this.context)
-      return { kind: "session-changed", snapshot: this.serviceSnapshot() }
-    }
-    return null
+    return readOnlyLegacyResult(this.context, intent)
   }
   private async showNativeUi(): Promise<ControlResult> {
     await this.context.options.showUi?.()

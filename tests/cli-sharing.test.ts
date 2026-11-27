@@ -223,7 +223,7 @@ async function waitFor(predicate: () => boolean) {
 }
 
 describe("CLI shares the native authority", () => {
-  test("Start help exposes the explicit standalone mode", () => {
+  test("Start help exposes explicit shared and standalone modes", () => {
     const child = Bun.spawnSync([
       process.execPath,
       fileURLToPath(new URL("../src/main.ts", import.meta.url)),
@@ -231,17 +231,18 @@ describe("CLI shares the native authority", () => {
       "--help",
     ])
     expect(child.exitCode).toBe(0)
+    expect(child.stdout.toString()).toContain("--shared")
     expect(child.stdout.toString()).toContain("--standalone")
   })
 
-  test("explicit standalone rejects a private profile before contacting its native owner", async () => {
+  test("default Start stays standalone and rejects a private profile before contacting its native owner", async () => {
     const shared = await owner()
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 100)
     try {
       await runStart({
         ...roots(),
-        values: { ...values, standalone: true },
+        values,
         explicit: {},
         signal: controller.signal,
       }).then(
@@ -260,12 +261,16 @@ describe("CLI shares the native authority", () => {
     }
   })
 
-  it("default Start attaches without resetting enterprise options, then recognizes Stop from another client", async () => {
+  it("shared Start attaches without resetting enterprise options, then recognizes Stop from another client", async () => {
     const shared = await owner()
+    const sharedValues = { ...values, shared: true }
     const pending = runStart({
       ...roots(),
-      values,
-      explicit: explicitCliRuntime({ values, rawArgs: [] }),
+      values: sharedValues,
+      explicit: explicitCliRuntime({
+        values: sharedValues,
+        rawArgs: ["--shared"],
+      }),
     })
     await waitFor(() =>
       shared.commands.some((intent) => intent.kind === "ensure-running"),
@@ -303,7 +308,7 @@ describe("CLI shares the native authority", () => {
     ).toHaveLength(1)
   })
 
-  it("Auth, quota and Debug use the native account while preserving old plaintext credentials", async () => {
+  it("shared Auth, quota and Debug use the native account while preserving old plaintext credentials", async () => {
     const shared = await owner()
     const oldPath = join(
       directory,
@@ -316,14 +321,20 @@ describe("CLI shares the native authority", () => {
       recursive: true,
     })
     await writeFile(oldPath, "fixture-old-account-token")
-    await runAuth({ ...roots(), verbose: false, showToken: false })
+    const authOpts = {
+      ...roots(),
+      shared: true,
+      verbose: false,
+      showToken: false,
+    }
+    await runAuth(authOpts)
     expect(
       shared.commands.filter((intent) => intent.kind === "authorize"),
     ).toHaveLength(1)
     expect(
       shared.commands.filter((intent) => intent.kind === "show-ui"),
     ).toHaveLength(1)
-    await runCheckUsage(roots())
+    await runCheckUsage({ ...roots(), shared: true })
     expect(
       shared.commands.filter((intent) => intent.kind === "refresh"),
     ).toHaveLength(1)
@@ -342,89 +353,85 @@ describe("CLI shares the native authority", () => {
     expect(await readFile(oldPath, "utf8")).toBe("fixture-old-account-token")
   })
 
-  test("native sign-out prevents Start and Auth from resurrecting preserved standalone credentials", async () => {
+  test("native sign-out prevents shared Start and Auth from resurrecting preserved standalone credentials", async () => {
     await writeNativeCredentialProvenance({
       ...roots(),
       provenance: { kind: "native-authority", account: "signed-out" },
     })
-    await runStart({ ...roots(), values, explicit: {} }).then(
-      () => {
-        throw new Error("Expected native-storage rejection")
-      },
-      (error: unknown) => {
-        expect(error instanceof Error && error.message).toContain(
-          privateControl.kind === "unsupported" ?
-            privateControl.message
-          : "native Copilot Proxy storage",
-        )
-      },
-    )
-    await runAuth({ ...roots(), verbose: false, showToken: false }).then(
-      () => {
-        throw new Error("Expected native-storage rejection")
-      },
-      (error: unknown) => {
-        expect(error instanceof Error && error.message).toContain(
-          privateControl.kind === "unsupported" ?
-            privateControl.message
-          : "native Copilot Proxy storage",
-        )
-      },
-    )
-  })
-
-  test("runtime overrides include only explicitly supplied flags and their actual boolean/auth values", () => {
-    expect(
-      explicitCliRuntime({
-        values: { ...values, rateLimit: 10, apiKey: "old-default" },
-        rawArgs: ["--verbose"],
-      }),
-    ).toEqual({})
-    expect(
-      explicitCliRuntime({
-        values: {
-          ...values,
-          port: 48925,
-          manual: false,
-          apiKey: "actual-one,actual-two",
+    const expected =
+      privateControl.kind === "unsupported" ?
+        privateControl.message
+      : "native Copilot Proxy storage"
+    const sharedStart = {
+      ...roots(),
+      values: { ...values, shared: true },
+      explicit: {},
+    }
+    for (const run of [
+      runStart(sharedStart),
+      runAuth({ ...roots(), shared: true, verbose: false, showToken: false }),
+    ]) {
+      await run.then(
+        () => {
+          throw new Error("Expected native-storage rejection")
         },
-        rawArgs: [
-          "--port=48925",
-          "--no-manual",
-          "--api-key",
-          "actual-one,actual-two",
-        ],
-      }),
-    ).toEqual({
-      port: 48925,
-      manualApprove: false,
-      authentication: { kind: "keyed", keys: ["actual-one", "actual-two"] },
-    })
-    expect(
-      explicitCliRuntime({
-        values: { ...values, port: 48925, rateLimitWait: true },
-        rawArgs: ["-p48925", "-w"],
-      }),
-    ).toEqual({ port: 48925, rateLimitWait: true })
-    expect(explicitCliRuntime({ values, rawArgs: ["--api-key", ""] })).toEqual({
-      authentication: { kind: "none" },
-    })
-    expect(explicitCliRuntime({ values, rawArgs: ["--standalone"] })).toEqual(
-      {},
-    )
-    expect(
-      explicitCliRuntime({
-        values: { ...values, verbose: true, rateLimitWait: true },
-        rawArgs: ["-vw"],
-      }),
-    ).toEqual({ rateLimitWait: true })
-    expect(
-      explicitCliRuntime({
-        values: { ...values, githubToken: "--manual" },
-        rawArgs: ["--github-token", "--manual"],
-      }),
-    ).toEqual({})
+        (error: unknown) => {
+          expect(error instanceof Error && error.message).toContain(expected)
+        },
+      )
+    }
   })
+})
+
+test("runtime overrides include only explicitly supplied flags and their actual boolean/auth values", () => {
+  expect(
+    explicitCliRuntime({
+      values: { ...values, rateLimit: 10, apiKey: "old-default" },
+      rawArgs: ["--verbose"],
+    }),
+  ).toEqual({})
+  expect(
+    explicitCliRuntime({
+      values: {
+        ...values,
+        port: 48925,
+        manual: false,
+        apiKey: "actual-one,actual-two",
+      },
+      rawArgs: [
+        "--port=48925",
+        "--no-manual",
+        "--api-key",
+        "actual-one,actual-two",
+      ],
+    }),
+  ).toEqual({
+    port: 48925,
+    manualApprove: false,
+    authentication: { kind: "keyed", keys: ["actual-one", "actual-two"] },
+  })
+  expect(
+    explicitCliRuntime({
+      values: { ...values, port: 48925, rateLimitWait: true },
+      rawArgs: ["-p48925", "-w"],
+    }),
+  ).toEqual({ port: 48925, rateLimitWait: true })
+  expect(explicitCliRuntime({ values, rawArgs: ["--api-key", ""] })).toEqual({
+    authentication: { kind: "none" },
+  })
+  expect(explicitCliRuntime({ values, rawArgs: ["--standalone"] })).toEqual({})
+  expect(
+    explicitCliRuntime({
+      values: { ...values, verbose: true, rateLimitWait: true },
+      rawArgs: ["-vw"],
+    }),
+  ).toEqual({ rateLimitWait: true })
+  expect(
+    explicitCliRuntime({
+      values: { ...values, githubToken: "--manual" },
+      rawArgs: ["--github-token", "--manual"],
+    }),
+  ).toEqual({})
 })
 
 test.each(["win32", "linux"] as const)(
@@ -439,8 +446,12 @@ test.each(["win32", "linux"] as const)(
     await mkdir(oldDirectory, { recursive: true })
     await writeFile(oldPath, "fixture-old-account-token")
     const results = await Promise.allSettled([
-      runStart({ ...roots(), values, explicit: {} }),
-      runAuth({ ...roots(), verbose: false, showToken: false }),
+      runStart({
+        ...roots(),
+        values: { ...values, shared: true },
+        explicit: {},
+      }),
+      runAuth({ ...roots(), shared: true, verbose: false, showToken: false }),
     ])
     for (const result of results)
       expect(result).toMatchObject({

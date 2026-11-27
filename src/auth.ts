@@ -17,6 +17,7 @@ import { setupGitHubToken } from "./lib/token"
 interface RunAuthOptions {
   verbose: boolean
   showToken: boolean
+  shared?: boolean
   homeDirectory?: string
   stateDirectory?: string
   signal?: AbortSignal
@@ -28,20 +29,27 @@ function accountEpoch(snapshot: ServiceSnapshot): number {
     : -1
 }
 
+async function beginNativeAuthorize(
+  session: ManagedSession,
+): Promise<{ before: ServiceSnapshot; initial: ServiceSnapshot }> {
+  const before = await session.read()
+  const result = await session.invoke({ kind: "authorize" })
+  if (result.kind === "unavailable") throw new Error(result.message)
+  if (result.kind === "session-changed" && result.snapshot.kind === "legacy")
+    throw new Error(
+      "The existing CLI account is read-only. Stop it normally before authorizing through Copilot Proxy.",
+    )
+  if (result.kind !== "applied")
+    throw new Error("The active proxy changed before authorization started.")
+  await session.invoke({ kind: "show-ui" })
+  return { before, initial: result.snapshot }
+}
+
 async function nativeAuthorize(options: {
   session: ManagedSession
   signal?: AbortSignal
 }): Promise<void> {
-  const before = await options.session.read()
-  if (before.kind !== "managed")
-    throw new Error(
-      "The existing CLI account is read-only. Stop it normally before authorizing through Copilot Proxy.",
-    )
-  const result = await options.session.invoke({ kind: "authorize" })
-  if (result.kind === "unavailable") throw new Error(result.message)
-  if (result.kind !== "applied")
-    throw new Error("The active proxy changed before authorization started.")
-  await options.session.invoke({ kind: "show-ui" })
+  const { before, initial } = await beginNativeAuthorize(options.session)
   const interrupted = new AbortController()
   const signal =
     options.signal ?
@@ -52,7 +60,7 @@ async function nativeAuthorize(options: {
   }
   process.once("SIGINT", cancel)
   process.once("SIGTERM", cancel)
-  let snapshot: ServiceSnapshot = result.snapshot
+  let snapshot: ServiceSnapshot = initial
   let lastCode: string | null = null
   try {
     while (true) {
@@ -112,21 +120,23 @@ export async function runAuth(options: RunAuthOptions): Promise<void> {
   state.showToken = options.showToken
 
   const context = await cliProxyOptions(options)
-  const session = await observeProxySession(context)
-  if (session.kind === "unavailable") throw new Error(session.message)
-  if (session.kind === "legacy") {
-    await session.release()
-    throw new Error(
-      "The existing CLI account is read-only. Stop it normally before authorizing through Copilot Proxy.",
-    )
-  }
-  if (session.kind === "managed") {
-    try {
-      await nativeAuthorize({ session, signal: options.signal })
-    } finally {
+  if (options.shared) {
+    const session = await observeProxySession(context)
+    if (session.kind === "unavailable") throw new Error(session.message)
+    if (session.kind === "legacy") {
       await session.release()
+      throw new Error(
+        "The existing CLI account is read-only. Stop it normally before authorizing through Copilot Proxy.",
+      )
     }
-    return
+    if (session.kind === "managed") {
+      try {
+        await nativeAuthorize({ session, signal: options.signal })
+      } finally {
+        await session.release()
+      }
+      return
+    }
   }
 
   requireDefaultStandaloneProfile(context.homeDirectory)
@@ -139,9 +149,14 @@ export async function runAuth(options: RunAuthOptions): Promise<void> {
 export const auth = defineCommand({
   meta: {
     name: "auth",
-    description: "Sign in to the active Copilot Proxy account",
+    description: "Run GitHub auth flow without running the server",
   },
   args: {
+    shared: {
+      type: "boolean",
+      default: false,
+      description: "Authorize the shared Copilot Proxy desktop account",
+    },
     verbose: {
       alias: "v",
       type: "boolean",
@@ -156,6 +171,7 @@ export const auth = defineCommand({
   },
   run({ args }) {
     return runAuth({
+      shared: args.shared,
       verbose: args.verbose,
       showToken: args["show-token"],
     })

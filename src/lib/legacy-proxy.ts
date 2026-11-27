@@ -605,6 +605,7 @@ export async function legacyIntentCompatible(
   intent: OpenProxySessionOptions["intent"],
   snapshot: Extract<ServiceSnapshot, { kind: "legacy" }>,
 ): Promise<boolean> {
+  if (snapshot.status !== "reachable") return false
   if (intent.credential.kind === "provided-token") return false
   const { port, authentication, ...other } = intent.explicit
   if (Object.keys(other).length > 0) return false

@@ -211,9 +211,11 @@ export function createSettingsStore(
   })
   const fileSchema = platformSettings.extend({
     nativeRuntime: nativeRuntimeSettingsSchema.optional(),
+    preferManagedPort: z.boolean().optional(),
   })
   let writes = Promise.resolve()
   let nativeRuntime: NativeRuntimeSettings | null = null
+  let managedPortPreferred = false
   return {
     async load(): Promise<{
       settings: DesktopSettings
@@ -222,12 +224,18 @@ export function createSettingsStore(
     }> {
       try {
         const raw: unknown = JSON.parse(await readFile(path, "utf8"))
-        const { nativeRuntime: stored, ...settings } = fileSchema.parse(raw)
+        const {
+          nativeRuntime: stored,
+          preferManagedPort,
+          ...settings
+        } = fileSchema.parse(raw)
         nativeRuntime = stored ?? null
+        managedPortPreferred = preferManagedPort === true
         return { settings, recovered: false, runtime: nativeRuntime }
       } catch (error) {
         const missing =
           error instanceof Error && "code" in error && error.code === "ENOENT"
+        managedPortPreferred = false
         return {
           settings: platformSettings.parse({}),
           recovered: !missing,
@@ -238,13 +246,19 @@ export function createSettingsStore(
     runtime(): NativeRuntimeSettings | null {
       return nativeRuntime && structuredClone(nativeRuntime)
     },
+    preferManagedPort(): boolean {
+      return managedPortPreferred
+    },
     save(
       settings: DesktopSettings,
       runtime?: NativeRuntimeSettings | null,
+      options?: { preferManagedPort?: boolean },
     ): Promise<void> {
       const write = writes
         .then(async () => {
           const nextRuntime = runtime === undefined ? nativeRuntime : runtime
+          const nextPreferManagedPort =
+            options?.preferManagedPort ?? managedPortPreferred
           const serialized =
             JSON.stringify(
               {
@@ -255,6 +269,7 @@ export function createSettingsStore(
                       nativeRuntimeSettingsSchema.parse(nextRuntime),
                   }
                 : {}),
+                ...(nextPreferManagedPort ? { preferManagedPort: true } : {}),
               },
               null,
               2,
@@ -264,13 +279,14 @@ export function createSettingsStore(
           try {
             await writeFile(temporary, serialized, { mode: 0o600, flag: "wx" })
             await rename(temporary, path)
-            return nextRuntime
+            return { nextRuntime, nextPreferManagedPort }
           } finally {
             await unlink(temporary).catch(() => undefined)
           }
         })
-        .then((committed) => {
-          nativeRuntime = committed
+        .then(({ nextRuntime, nextPreferManagedPort }) => {
+          nativeRuntime = nextRuntime
+          managedPortPreferred = nextPreferManagedPort
         })
       writes = write.catch(() => undefined)
       return write

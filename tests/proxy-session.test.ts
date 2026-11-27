@@ -496,10 +496,9 @@ describe("native source discovery", () => {
     expect((await creator.invoke({ kind: "sign-out" })).kind).toBe(
       "session-changed",
     )
-    const before = owner.commands.length
     const observer = await openProxySession(options())
     expect(observer.kind).toBe("managed")
-    expect(owner.commands).toHaveLength(before)
+    expect(owner.commands.at(-1)?.kind).toBe("refresh")
     if (observer.kind === "managed") {
       expect(observer.lifecycle.kind).toBe("observer")
       await observer.release()
@@ -507,7 +506,7 @@ describe("native source discovery", () => {
     expect(
       (await openProxySession(options({ manualApprove: true }))).kind,
     ).toBe("unavailable")
-    expect(owner.commands).toHaveLength(before)
+    expect(owner.snapshot().kind).toBe("legacy")
     unsubscribe()
     await creator.release()
   })

@@ -744,20 +744,18 @@ for (const storedRuntime of [true, false])
     15_000,
   )
 
-test("legacy runtime edits are refused against displayed values without changing saved preferences", async () => {
+test("legacy account type edits are refused against displayed values without changing saved preferences", async () => {
   const context = await legacyPreferences(true)
   const saved = await readFile(context.settingsPath, "utf8")
   const previous = context.controller.snapshot().settings
-  for (const edit of [{ port: context.port }, { accountType: "enterprise" }]) {
-    const result = await context.controller.invoke({
-      kind: "save-settings",
-      settings: { ...previous, ...edit, theme: "dark" },
-    })
-    expect(result.notice?.kind).toBe("error")
-    expect(result.settings).toEqual(previous)
-    expect(await readFile(context.settingsPath, "utf8")).toBe(saved)
-    expect(await served(context.controller)).toBe(200)
-  }
+  const result = await context.controller.invoke({
+    kind: "save-settings",
+    settings: { ...previous, accountType: "enterprise", theme: "dark" },
+  })
+  expect(result.notice?.kind).toBe("error")
+  expect(result.settings).toEqual(previous)
+  expect(await readFile(context.settingsPath, "utf8")).toBe(saved)
+  expect(await served(context.controller)).toBe(200)
   expect(context.credentialCalls).toEqual([])
 }, 15_000)
 

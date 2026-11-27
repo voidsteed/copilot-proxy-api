@@ -42,7 +42,7 @@ pub fn view<'a>(
     };
 
     let gateway_btn_label = if external {
-        "Managed in Terminal"
+        "Disconnect CLI"
     } else if stopping {
         "Stopping..."
     } else if can_stop {
@@ -51,7 +51,12 @@ pub fn view<'a>(
         "Start gateway"
     };
 
-    let gateway_btn_msg = if signed_in && !stopping && !external {
+    let gateway_btn_msg = if external {
+        Some(Message::RunCommand(
+            DesktopCommand::DetachLegacy,
+            Some("Disconnected from CLI proxy".to_string()),
+        ))
+    } else if signed_in && !stopping {
         Some(Message::RunCommand(
             if can_stop {
                 DesktopCommand::StopGateway
@@ -68,7 +73,11 @@ pub fn view<'a>(
         btn_secondary(
             p,
             gateway_btn_label,
-            Some(if can_stop { icons::STOP } else { icons::PLAY }),
+            if external {
+                None
+            } else {
+                Some(if can_stop { icons::STOP } else { icons::PLAY })
+            },
             gateway_btn_msg,
         )
     } else {
