@@ -622,7 +622,7 @@ What works with Copilot:
 Known gaps (not provided by GitHub Copilot):
 
 - **No server-side Gemini tools.** `googleSearch` (used by `agy`'s `search_web` tool), `urlContext`, and `codeExecution` return HTTP 400 rather than returning spoofed results.
-- **No `image/gif`.** Copilot rejects GIF images upstream, so the proxy rejects `image/gif` with HTTP 400.
+- **No direct video, audio, or `image/gif` attachments.** Copilot rejects `video/*`, `audio/*`, and `image/gif` upstream, so direct user `inlineData` attachments with those media types return HTTP 400. When a tool result (`functionResponse.parts`, such as `agy`'s `read_file` on an `.mp4`, `.wav`, or `.gif`) returns unsupported inline media or an unreadable PDF, the proxy omits the binary attachment and appends a text note to the tool response so the conversation does not break on subsequent turns.
 - **No fixed thinking budgets or Gemini-only request fields.** Non-negative `thinkingBudget` values (`0` or positive), `safetySettings`, `cachedContent`, `fileData`, and `responseSchema` return HTTP 400.
 - **No image-only PDFs.** PDF support extracts text only; scanned or image-only PDFs lose visual content.
 

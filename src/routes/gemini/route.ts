@@ -13,7 +13,12 @@ import { state } from "~/lib/state"
 import { createChatCompletions } from "~/services/copilot/create-chat-completions"
 
 import { describeModel, googleModels, selectModel } from "./models"
-import { GeminiError, requestSchema, responseSchema } from "./schemas"
+import {
+  formatZodValidationError,
+  GeminiError,
+  requestSchema,
+  responseSchema,
+} from "./schemas"
 import { GeminiStream } from "./stream"
 import {
   preprocessGeminiRequest,
@@ -133,9 +138,9 @@ async function readRequest(c: Context) {
   if (unsupportedTool) throw new GeminiError(unsupportedTool)
   const parsed = requestSchema.safeParse(body)
   if (!parsed.success) {
-    const issue = parsed.error.issues[0]
+    const issue = formatZodValidationError(parsed.error.issues, body)
     throw new GeminiError(
-      `Unsupported or invalid Gemini request field at ${issue.path.join(".") || "body"}. ${issue.message}`,
+      `Unsupported or invalid Gemini request field at ${issue.path}. ${issue.message}`,
     )
   }
   return parsed.data
