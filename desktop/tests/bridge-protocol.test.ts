@@ -58,6 +58,7 @@ beforeAll(async () => {
   await symlink(
     await realpath(path.join(root, "desktop/node_modules")),
     path.join(bundleDirectory, "node_modules"),
+    process.platform === "win32" ? "junction" : "dir",
   )
   await build({
     absWorkingDir: path.join(root, "desktop"),
@@ -83,12 +84,19 @@ afterEach(async () => {
 
 afterAll(async () => {
   if (bundleDirectory)
-    await rm(bundleDirectory, { recursive: true, force: true })
+    await rm(bundleDirectory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    })
 })
 
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), prefix))
-  cleanupTasks.push(() => rm(dir, { recursive: true, force: true }))
+  cleanupTasks.push(() =>
+    rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+  )
   return dir
 }
 
@@ -169,13 +177,27 @@ function spawnBridge(
     code: number | null
     signal: NodeJS.Signals | null
   }>((resolve) => {
-    child.once("exit", (code, signal) => resolve({ code, signal }))
+    let settled = false
+    const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return
+      settled = true
+      resolve({ code, signal })
+    }
+    child.once("exit", finish)
+    child.once("close", finish)
+    child.once("error", () => finish(1, null))
   })
 
   cleanupTasks.push(async () => {
     if (child.exitCode !== null || child.signalCode !== null) return
-    child.kill("SIGKILL")
-    await exited
+    child.stdin.destroy()
+    child.stdout.destroy()
+    child.stderr.destroy()
+    child.kill()
+    await Promise.race([
+      exited,
+      new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+    ])
   })
 
   function send(message: unknown): void {
@@ -271,7 +293,32 @@ function spawnBridge(
     sendCommand,
     closeStdin: () => {
       child.stdin.end()
+      if (process.platform === "win32") child.stdin.destroy()
     },
+  }
+}
+
+async function waitForExit(
+  client: BridgeClient,
+  timeoutMs = 15_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      client.exited,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              `Timed out waiting for bridge exit. stderr: ${client.stderrChunks.join("")}`,
+            ),
+          )
+        }, timeoutMs)
+        timer.unref()
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }
 
@@ -640,7 +687,7 @@ describe("built bridge.cjs subprocess E2E under Node 24", () => {
     }
 
     client.send({ type: "shutdown" })
-    const exit = await client.exited
+    const exit = await waitForExit(client)
     expect(exit.code).toBe(0)
   }, 30_000)
 })
@@ -695,7 +742,7 @@ describe("built bridge.cjs encrypted vault persistence and EOF shutdown", () => 
     expect(savedFiles).not.toContain("credentials.enc")
 
     first.send({ type: "shutdown" })
-    expect((await first.exited).code).toBe(0)
+    expect((await waitForExit(first)).code).toBe(0)
 
     const second = spawnBridge(
       [
@@ -737,7 +784,7 @@ describe("built bridge.cjs encrypted vault persistence and EOF shutdown", () => 
     expect(restored.snapshot.account.kind).toBe("signed-in")
 
     second.closeStdin()
-    const eofExit = await second.exited
+    const eofExit = await waitForExit(second)
     expect(eofExit.code).toBe(0)
   }, 45_000)
 })

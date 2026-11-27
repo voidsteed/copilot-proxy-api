@@ -426,11 +426,16 @@ function attachLineReader(options: {
   options.input.on("data", onData)
   options.input.once("end", onInputEnd)
   options.input.once("close", onInputClose)
+  options.input.once("error", onInputClose)
+  if ("resume" in options.input && typeof options.input.resume === "function") {
+    options.input.resume()
+  }
 
   return () => {
     options.input.off("data", onData)
     options.input.off("end", onInputEnd)
     options.input.off("close", onInputClose)
+    options.input.off("error", onInputClose)
   }
 }
 
