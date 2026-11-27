@@ -328,7 +328,6 @@ function createHostCallChannel(options: {
           pending.delete(id)
           reject(new Error(`Host call "${call.kind}" timed out.`))
         }, options.timeoutMs)
-        timer.unref()
         pending.set(id, { kind: call.kind, resolve, reject, timer })
         options.send({ type: "host-call", id, call })
       })
@@ -505,7 +504,6 @@ function flushFatalFrame(
       resolve()
     }
     const timer = setTimeout(done, FATAL_FLUSH_TIMEOUT_MS)
-    timer.unref()
     writeFrame(output, { type: "fatal", message }, done)
   })
 }
@@ -683,7 +681,6 @@ async function boundedCleanup(
           timedOut = true
           resolve()
         }, timeoutMs)
-        timer.unref()
       }),
     ])
   } finally {

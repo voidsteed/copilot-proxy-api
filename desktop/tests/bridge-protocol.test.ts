@@ -314,7 +314,6 @@ async function waitForExit(
             ),
           )
         }, timeoutMs)
-        timer.unref()
       }),
     ])
   } finally {
