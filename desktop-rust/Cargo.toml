@@ -1,6 +1,6 @@
 [package]
 name = "copilot-proxy-desktop"
-version = "0.0.8"
+version = "0.0.9"
 edition = "2024"
 description = "Minimal native Rust desktop companion for Copilot Proxy"
 

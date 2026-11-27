@@ -23,10 +23,10 @@ Complete the GitHub sign-in, choose your models, then paste the generated Claude
 
 Copilot Proxy Desktop is a native Rust (`iced`) menu bar app for Apple Silicon Macs. It removes Electron and Chromium, runs at `0.0%` idle CPU, stores credentials in macOS Keychain, shows live quota and request activity, and provides copyable config snippets plus duplicate-safe one-click config updates for Claude Code, Codex CLI, OpenCode, and Antigravity CLI (`agy`).
 
-- **Latest macOS release (`desktop-v0.0.8`, Apple Silicon):**
-  - [Download `Copilot-Proxy-0.0.8-macos-arm64.dmg`](https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.8/Copilot-Proxy-0.0.8-macos-arm64.dmg)
-  - [Download `Copilot-Proxy-0.0.8-macos-arm64.zip`](https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.8/Copilot-Proxy-0.0.8-macos-arm64.zip)
-  - [Release notes and `SHA256SUMS.txt`](https://github.com/voidsteed/copilot-proxy-api/releases/tag/desktop-v0.0.8)
+- **Latest macOS release (`desktop-v0.0.9`, Apple Silicon):**
+  - [Download `Copilot-Proxy-0.0.9-macos-arm64.dmg`](https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.9/Copilot-Proxy-0.0.9-macos-arm64.dmg)
+  - [Download `Copilot-Proxy-0.0.9-macos-arm64.zip`](https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.9/Copilot-Proxy-0.0.9-macos-arm64.zip)
+  - [Release notes and `SHA256SUMS.txt`](https://github.com/voidsteed/copilot-proxy-api/releases/tag/desktop-v0.0.9)
 
 ### Install on macOS
 

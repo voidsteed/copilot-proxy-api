@@ -77,11 +77,11 @@ Copilot's catalog. Server-side Gemini tools (`googleSearch`, `urlContext`,
 
 ## Desktop app (macOS)
 
-Copilot Proxy Desktop (`desktop-v0.0.8`) is a native Rust (`iced`) menu bar app for Apple Silicon Macs that replaces Electron while reusing the local TypeScript proxy engine.
+Copilot Proxy Desktop (`desktop-v0.0.9`) is a native Rust (`iced`) menu bar app for Apple Silicon Macs that replaces Electron while reusing the local TypeScript proxy engine.
 
-- Release page and SHA-256 checksums: https://github.com/voidsteed/copilot-proxy-api/releases/tag/desktop-v0.0.8
-- Apple Silicon DMG: https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.8/Copilot-Proxy-0.0.8-macos-arm64.dmg
-- Apple Silicon ZIP: https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.8/Copilot-Proxy-0.0.8-macos-arm64.zip
+- Release page and SHA-256 checksums: https://github.com/voidsteed/copilot-proxy-api/releases/tag/desktop-v0.0.9
+- Apple Silicon DMG: https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.9/Copilot-Proxy-0.0.9-macos-arm64.dmg
+- Apple Silicon ZIP: https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.9/Copilot-Proxy-0.0.9-macos-arm64.zip
 - Requires Node.js 24+ for the local proxy bridge. Because the release is ad-hoc signed, run `xattr -dr com.apple.quarantine "/Applications/Copilot Proxy.app"` before first launch.
 - Provides copyable config snippets and duplicate-safe config merging for Claude Code, Codex CLI, and OpenCode, plus read-only diagnostics and session commands for Antigravity CLI (`agy`).
 

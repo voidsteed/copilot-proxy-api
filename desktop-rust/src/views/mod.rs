@@ -692,7 +692,7 @@ fn view_sidebar<'a>(state: &'a AppState, p: Palette) -> Element<'a, Message> {
         .snapshot
         .as_ref()
         .map(|s| format!("v{} · Native Rust", s.version))
-        .unwrap_or_else(|| "v0.0.8 · Native Rust".to_string());
+        .unwrap_or_else(|| "v0.0.9 · Native Rust".to_string());
 
     let bottom = column![
         gateway_chip,

@@ -32,4 +32,4 @@ Package `Copilot Proxy.app`, `.dmg`, `.zip`, and `SHA256SUMS.txt`:
 
 ## Releases
 
-Tag a release with `desktop-v<version>` (for example `desktop-v0.0.8`) or trigger `.github/workflows/release-desktop.yml` via `workflow_dispatch`.
+Tag a release with `desktop-v<version>` (for example `desktop-v0.0.9`) or trigger `.github/workflows/release-desktop.yml` via `workflow_dispatch`.

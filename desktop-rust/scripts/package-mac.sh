@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUST_DIR="$REPO_ROOT/desktop-rust"
-VERSION="${COPILOT_PROXY_DESKTOP_VERSION:-0.0.8}"
+VERSION="${COPILOT_PROXY_DESKTOP_VERSION:-0.0.9}"
 BUILD_NUMBER="$(printf '%s' "${VERSION##*.}" | tr -cd '0-9')"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 ARCH="$(uname -m)"
