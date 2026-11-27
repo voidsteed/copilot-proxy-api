@@ -1,0 +1,115 @@
+name: Desktop Rust Release
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release-desktop.yml
+      - desktop-rust/**
+      - desktop/bridge/**
+      - desktop/main/clipboard.ts
+      - desktop/main/vault.ts
+      - desktop/shared/**
+      - desktop/scripts/build.mjs
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (leave empty for dry-run artifact upload only)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-package-macos:
+    name: Rust desktop macOS (arm64)
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop-rust
+
+      - name: Install root and desktop dependencies
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun install --cwd desktop --frozen-lockfile --ignore-scripts
+
+      - name: Run Rust unit tests
+        working-directory: desktop-rust
+        run: cargo test --bin copilot-proxy-desktop
+
+      - name: Package macOS Apple Silicon release artifacts
+        env:
+          COPILOT_PROXY_PACKAGE_OUTPUT: ${{ runner.temp }}/copilot-proxy-rust-package
+          CARGO_TARGET_DIR: ${{ github.workspace }}/desktop-rust/target
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${INPUT_TAG}" ]; then
+            TAG_NAME="${INPUT_TAG}"
+          fi
+          if [[ "$TAG_NAME" == desktop-v* ]]; then
+            export COPILOT_PROXY_DESKTOP_VERSION="${TAG_NAME#desktop-v}"
+          fi
+          ./desktop-rust/scripts/package-mac.sh
+
+      - name: Upload macOS release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-proxy-rust-macos-arm64
+          path: ${{ runner.temp }}/copilot-proxy-rust-package/release-artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    name: Publish macOS desktop release
+    needs: test-and-package-macos
+    if: startsWith(github.ref, 'refs/tags/desktop-v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: copilot-proxy-rust-macos-arm64
+          path: release-artifacts
+
+      - name: Publish GitHub Release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG_NAME="${INPUT_TAG}"
+          fi
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" release-artifacts/* --clobber
+          else
+            gh release create "$TAG_NAME" release-artifacts/* \
+              --title "Copilot Proxy Desktop ${TAG_NAME#desktop-v}" \
+              --generate-notes
+          fi

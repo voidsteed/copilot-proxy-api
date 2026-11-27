@@ -171,6 +171,7 @@
         </a>
 
         <nav class="site-nav" aria-label="Primary navigation">
+          <a class="nav-docs" href="#desktop-app">Desktop App</a>
           <a class="nav-docs" href="#quick-start">Claude Code</a>
           <a class="nav-docs" href="#codex-quick-start">Codex CLI</a>
           <a class="nav-docs" href="#agy-quick-start">Antigravity CLI</a>
@@ -194,7 +195,10 @@
             compatible API clients through one bridge.
           </p>
           <div class="hero-actions">
-            <a class="button button-primary" href="#quick-start"
+            <a class="button button-primary" href="#desktop-app"
+              >Download macOS App</a
+            >
+            <a class="button button-secondary" href="#quick-start"
               >Start with Claude Code</a
             >
             <a class="button button-secondary" href="#codex-quick-start"
@@ -266,6 +270,94 @@
             <code>/v1/embeddings</code>
           </div>
         </div>
+      </section>
+
+      <section
+        class="section shell quick-start"
+        id="desktop-app"
+        aria-labelledby="desktop-app-title"
+      >
+        <div class="section-heading">
+          <h2 id="desktop-app-title">Native macOS desktop app.</h2>
+          <p>
+            Manage your local gateway, inspect Copilot quota and request
+            activity, and configure Claude Code, Codex CLI, OpenCode, and
+            Antigravity CLI from a lightweight Rust menu bar app.
+          </p>
+        </div>
+
+        <div class="quick-start-grid">
+          <div class="code-panel">
+            <div class="code-panel-bar">
+              <span>macOS Apple Silicon · desktop-v0.0.8</span>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy-target="desktop-install-command"
+                data-copy-status="desktop-copy-status"
+                data-copy-label="Quarantine command copied to your clipboard."
+              >
+                Copy
+              </button>
+            </div>
+            <div class="hero-actions" style="padding: 18px 20px 6px">
+              <a
+                class="button button-primary"
+                href="https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.8/Copilot-Proxy-0.0.8-macos-arm64.dmg"
+                >Download DMG (arm64)</a
+              >
+              <a
+                class="button button-secondary"
+                href="https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.8/Copilot-Proxy-0.0.8-macos-arm64.zip"
+                >Download ZIP</a
+              >
+              <a
+                class="button button-ghost"
+                href="https://github.com/voidsteed/copilot-proxy-api/releases/tag/desktop-v0.0.8"
+                target="_blank"
+                rel="noopener noreferrer"
+                >Release notes &amp; SHA-256</a
+              >
+            </div>
+            <pre><code id="desktop-install-command">xattr -dr com.apple.quarantine "/Applications/Copilot Proxy.app"</code></pre>
+            <p class="code-note">
+              Built with Rust (<code>iced</code>) instead of Electron. Requires
+              Node.js 24+ for the local proxy bridge. The build is ad-hoc
+              signed, so run the command above once after moving the app to
+              Applications.
+            </p>
+          </div>
+
+          <div class="setup-path">
+            <article>
+              <h3>Minimal footprint</h3>
+              <p>
+                Closing the window frees UI memory while keeping the Retina menu
+                bar tray active at 0% idle CPU.
+              </p>
+            </article>
+            <article>
+              <h3>Safe agent setup</h3>
+              <p>
+                Preview and copy exact JSON or TOML config snippets, or add
+                missing keys with duplicate and conflict checks.
+              </p>
+            </article>
+            <article>
+              <h3>macOS Keychain storage</h3>
+              <p>
+                Encrypts saved credentials locally with macOS Keychain and
+                coexists cleanly with a running CLI proxy on port 4141.
+              </p>
+            </article>
+          </div>
+        </div>
+        <p
+          class="copy-status"
+          id="desktop-copy-status"
+          role="status"
+          aria-live="polite"
+        ></p>
       </section>
 
       <section

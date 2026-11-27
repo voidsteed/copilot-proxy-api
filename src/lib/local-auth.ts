@@ -10,7 +10,10 @@ export function parseLocalApiKeys(value: string | undefined): Array<string> {
     .filter((key) => key.length > 0)
 }
 
-function isGeminiPath(path: string, hasGoogleKeyHeader: boolean): boolean {
+export function isGeminiPath(
+  path: string,
+  hasGoogleKeyHeader: boolean,
+): boolean {
   if (path === "/v1beta/models" || path.startsWith("/v1beta/models/"))
     return true
   if (path === "/v1/models") return hasGoogleKeyHeader

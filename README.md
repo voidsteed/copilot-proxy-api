@@ -17,7 +17,31 @@ npx copilot-proxy-api@latest start --claude-code
 
 Complete the GitHub sign-in, choose your models, then paste the generated Claude Code command into a new terminal.
 
-**Client guides:** [Claude Code](#using-with-claude-code) · [Codex CLI](#using-with-codex-cli) · [Antigravity CLI (agy)](#using-with-antigravity-cli-agy) · [Generic OpenAI, Anthropic, and Gemini clients](#api-endpoints)
+**Client guides:** [Desktop App (macOS)](#desktop-app-macos) · [Claude Code](#using-with-claude-code) · [Codex CLI](#using-with-codex-cli) · [Antigravity CLI (agy)](#using-with-antigravity-cli-agy) · [Generic OpenAI, Anthropic, and Gemini clients](#api-endpoints)
+
+## Desktop App (macOS)
+
+Copilot Proxy Desktop is a native Rust (`iced`) menu bar app for Apple Silicon Macs. It removes Electron and Chromium, runs at `0.0%` idle CPU, stores credentials in macOS Keychain, shows live quota and request activity, and provides copyable config snippets plus duplicate-safe one-click config updates for Claude Code, Codex CLI, OpenCode, and Antigravity CLI (`agy`).
+
+- **Latest macOS release (`desktop-v0.0.8`, Apple Silicon):**
+  - [Download `Copilot-Proxy-0.0.8-macos-arm64.dmg`](https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.8/Copilot-Proxy-0.0.8-macos-arm64.dmg)
+  - [Download `Copilot-Proxy-0.0.8-macos-arm64.zip`](https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.8/Copilot-Proxy-0.0.8-macos-arm64.zip)
+  - [Release notes and `SHA256SUMS.txt`](https://github.com/voidsteed/copilot-proxy-api/releases/tag/desktop-v0.0.8)
+
+### Install on macOS
+
+Requires Node.js 24 or later in `PATH` (or `fnm`, `nvm`, or Homebrew) for the local proxy bridge.
+
+1. Download the DMG, open it, and drag **Copilot Proxy.app** into **Applications**.
+2. Because the build is currently ad-hoc signed, clear the macOS quarantine attribute before the first launch:
+
+   ```sh
+   xattr -dr com.apple.quarantine "/Applications/Copilot Proxy.app"
+   ```
+
+3. Open **Copilot Proxy**. It attaches read-only to an already-running CLI proxy on port 4141 or manages its own local gateway after GitHub sign-in.
+
+To build the macOS bundle from source, run `./desktop-rust/scripts/package-mac.sh`. See [desktop-rust/README.md](./desktop-rust/README.md) for details.
 
 ### See It in Action (30 Seconds)
 
@@ -205,21 +229,23 @@ Copilot API now uses a subcommand structure with these main commands:
 
 ### Start Command Options
 
-The following command line options are available for the `start` command:
+The following command line options are available for the `start` command. When the desktop app is installed, `start` attaches to or wakes the shared proxy unless `--standalone` is set.
 
-| Option         | Description                                                                   | Default    | Alias |
-| -------------- | ----------------------------------------------------------------------------- | ---------- | ----- |
-| --port         | Port to listen on                                                             | 4141       | -p    |
-| --verbose      | Enable verbose logging                                                        | false      | -v    |
-| --account-type | Account type to use (individual, business, enterprise)                        | individual | -a    |
-| --manual       | Enable manual request approval                                                | false      | none  |
-| --rate-limit   | Rate limit in seconds between requests                                        | none       | -r    |
-| --wait         | Wait instead of error when rate limit is hit                                  | false      | -w    |
-| --github-token | Provide GitHub token directly (must be generated using the `auth` subcommand) | none       | -g    |
-| --claude-code  | Generate a command to launch Claude Code with Copilot API config              | false      | -c    |
-| --show-token   | Show GitHub and Copilot tokens on fetch and refresh                           | false      | none  |
-| --api-key      | Require one of these comma-separated API keys for proxy routes                | none       | none  |
-| --proxy-env    | Initialize proxy from environment variables                                   | false      | none  |
+| Option                   | Description                                                                   | Default    | Alias |
+| ------------------------ | ----------------------------------------------------------------------------- | ---------- | ----- |
+| --standalone             | Start a separate API server without attaching to the desktop proxy            | false      | none  |
+| --port                   | Port to listen on                                                             | 4141       | -p    |
+| --verbose                | Enable verbose logging                                                        | false      | -v    |
+| --account-type           | Account type to use (individual, business, enterprise)                        | individual | -a    |
+| --manual                 | Enable manual request approval                                                | false      | none  |
+| --rate-limit             | Rate limit in seconds between requests                                        | none       | -r    |
+| --wait                   | Wait instead of error when rate limit is hit                                  | false      | -w    |
+| --github-token           | Provide GitHub token directly (must be generated using the `auth` subcommand) | none       | -g    |
+| --claude-code            | Generate a command to launch Claude Code with Copilot API config              | false      | -c    |
+| --show-token             | Show GitHub and Copilot tokens on fetch and refresh in standalone CLI mode    | false      | none  |
+| --api-key                | Require one of these comma-separated API keys for proxy routes                | none       | none  |
+| --proxy-env              | Initialize proxy from environment variables                                   | false      | none  |
+| --responses-context-trim | Trim old `/responses` history to fit an estimated token budget                | false      | none  |
 
 ### Auth Command Options
 

@@ -127,6 +127,7 @@ describe("GitHub request deadlines", () => {
       expect(headers.get("authorization")).toBe("token local-github-token")
       expect(headers.get("accept")).toBe("application/json")
       expect(headers.get("content-type")).toBe("application/json")
+      expect(headers.get("x-github-api-version")).toBe("2022-11-28")
     }
     expect(requests[0].headers.get("editor-version")).toBe("vscode/test-editor")
   })

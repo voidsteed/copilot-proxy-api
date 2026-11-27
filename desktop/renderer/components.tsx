@@ -1,0 +1,416 @@
+import {
+  LoaderCircle,
+  RefreshCw,
+  TriangleAlert,
+  X,
+  type LucideIcon,
+} from "lucide-react"
+import {
+  Component,
+  useEffect,
+  useId,
+  useRef,
+  type ComponentProps,
+  type ReactNode,
+} from "react"
+
+import type { DesktopModel, DesktopSnapshot } from "../shared/contracts"
+
+type ButtonProps = ComponentProps<"button"> & {
+  variant?: "primary" | "secondary" | "ghost" | "danger"
+  icon?: LucideIcon
+  busy?: boolean
+}
+
+export function Button({
+  variant = "secondary",
+  icon: Icon,
+  busy = false,
+  children,
+  className = "",
+  disabled,
+  ...props
+}: ButtonProps) {
+  const DisplayIcon = busy ? LoaderCircle : Icon
+  return (
+    <button
+      type="button"
+      {...props}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
+      className={`button button-${variant} ${className}`}
+    >
+      {DisplayIcon && (
+        <DisplayIcon
+          size={15}
+          strokeWidth={1.8}
+          aria-hidden="true"
+          className={busy ? "spin" : undefined}
+        />
+      )}
+      {children}
+    </button>
+  )
+}
+
+export type BadgeTone = "neutral" | "success" | "warning" | "error"
+
+export function Badge({
+  children,
+  tone = "neutral",
+  dot = false,
+}: {
+  children: ReactNode
+  tone?: BadgeTone
+  dot?: boolean
+}) {
+  return (
+    <span className={`badge badge-${tone}`}>
+      {dot && <span className="status-dot" />}
+      {children}
+    </span>
+  )
+}
+
+export function EmptyState({
+  icon: Icon,
+  title,
+  children,
+  action,
+}: {
+  icon: LucideIcon
+  title: string
+  children?: ReactNode
+  action?: ReactNode
+}) {
+  return (
+    <div className="empty-state">
+      <div className="empty-icon">
+        <Icon size={23} strokeWidth={1.5} aria-hidden="true" />
+      </div>
+      <h3>{title}</h3>
+      {children && <p>{children}</p>}
+      {action}
+    </div>
+  )
+}
+
+export function Dialog({
+  title,
+  children,
+  onClose,
+  footer,
+}: {
+  title: string
+  children: ReactNode
+  onClose: () => void
+  footer?: ReactNode
+}) {
+  const titleId = useId()
+  const container = useRef<HTMLDivElement>(null)
+  const closeHandler = useRef(onClose)
+  closeHandler.current = onClose
+
+  useEffect(() => {
+    const previousFocus = document.activeElement
+    const element = container.current
+    element?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        closeHandler.current()
+      }
+      if (event.key !== "Tab" || !element) return
+      const focusable = Array.from(
+        element.querySelectorAll<HTMLElement>(
+          "button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+        ),
+      ).filter((control) => control.getClientRects().length > 0)
+      const first = focusable.at(0)
+      const last = focusable.at(-1)
+      const active = document.activeElement
+      const outside = !active || !element.contains(active)
+      if (!first || !last) {
+        event.preventDefault()
+        element.focus()
+      } else if (outside) {
+        event.preventDefault()
+        if (event.shiftKey) last.focus()
+        else first.focus()
+      } else if (event.shiftKey && (active === first || active === element)) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (active === last || active === element)) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("keydown", onKeyDown)
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected)
+        previousFocus.focus()
+      else document.querySelector<HTMLElement>("[aria-current='page']")?.focus()
+    }
+  }, [])
+
+  return (
+    <div
+      className="dialog-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) closeHandler.current()
+      }}
+    >
+      <div
+        ref={container}
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+      >
+        <div className="dialog-header">
+          <h2 id={titleId}>{title}</h2>
+          <Button
+            variant="ghost"
+            icon={X}
+            className="icon-button"
+            aria-label="Close dialog"
+            onClick={onClose}
+          />
+        </div>
+        <div className="dialog-content">{children}</div>
+        {footer && <div className="dialog-footer">{footer}</div>}
+      </div>
+    </div>
+  )
+}
+
+const numberFormatter = new Intl.NumberFormat(undefined)
+const compactFormatter = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+})
+
+export function formatNumber(value: number | null): string {
+  return value === null ? "—" : numberFormatter.format(value)
+}
+
+export function formatLimit(value: number | null): string {
+  return value === null ? "Unknown" : (
+      compactFormatter.format(value).toLowerCase()
+    )
+}
+
+export function formatTokens(value: number | null): string {
+  return value === null ? "n/a" : formatNumber(value)
+}
+
+export function formatDuration(value: number): string {
+  return value < 1000 ?
+      `${Math.round(value)} ms`
+    : `${(value / 1000).toFixed(1)} s`
+}
+
+function displayDate(value: string): Date | null {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  const calendar = /^(\d{4}-\d{2}-\d{2})(?:$|T)/.exec(value)?.[1]
+  if (calendar) {
+    const day = new Date(`${calendar}T00:00:00Z`)
+    if (
+      Number.isNaN(day.getTime())
+      || day.toISOString().slice(0, 10) !== calendar
+    )
+      return null
+  }
+  return date
+}
+
+export function formatDateTime(value: string): string {
+  const date = displayDate(value)
+  return date === null ? "Unknown" : (
+      date.toLocaleString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    )
+}
+
+export function formatDate(value: string): string {
+  const date = displayDate(value)
+  return date === null ? "Unknown" : (
+      date.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        ...(/^\d{4}-\d{2}-\d{2}$/.test(value) ? { timeZone: "UTC" } : {}),
+      })
+    )
+}
+
+export function gatewayStatus(gateway: DesktopSnapshot["gateway"]): {
+  label: string
+  tone: BadgeTone
+} {
+  switch (gateway.kind) {
+    case "running": {
+      return { label: "Running", tone: "success" }
+    }
+    case "starting": {
+      return { label: "Starting", tone: "warning" }
+    }
+    case "stopping": {
+      return { label: "Stopping", tone: "warning" }
+    }
+    case "draining": {
+      return { label: "Finishing requests", tone: "warning" }
+    }
+    case "error": {
+      return { label: "Needs attention", tone: "error" }
+    }
+    case "stopped": {
+      return { label: "Stopped", tone: "neutral" }
+    }
+    default: {
+      const exhaustive: never = gateway
+      return exhaustive
+    }
+  }
+}
+
+export function nextTabIndex({
+  key,
+  index,
+  length,
+}: {
+  key: string
+  index: number
+  length: number
+}): number | null {
+  if (length === 0) return null
+  switch (key) {
+    case "Home": {
+      return 0
+    }
+    case "End": {
+      return length - 1
+    }
+    case "ArrowRight":
+    case "ArrowDown": {
+      return (index + 1) % length
+    }
+    case "ArrowLeft":
+    case "ArrowUp": {
+      return (index - 1 + length) % length
+    }
+    default: {
+      return null
+    }
+  }
+}
+
+export function ModelSelect({
+  models,
+  value,
+  onChange,
+  disabled,
+  id = "model-select",
+  label = "Model",
+}: {
+  models: Array<DesktopModel>
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
+  id?: string
+  label?: string
+}) {
+  const needsPlaceholder =
+    models.length > 0
+    && (value === "" || !models.some((model) => model.id === value))
+  return (
+    <label className="field" htmlFor={id}>
+      <span>{label}</span>
+      <select
+        id={id}
+        value={needsPlaceholder ? "" : value}
+        onChange={(event) => {
+          onChange(event.target.value)
+        }}
+        disabled={disabled || models.length === 0}
+      >
+        {models.length === 0 && <option value="">No models available</option>}
+        {needsPlaceholder && (
+          <option value="" disabled>
+            Select a model
+          </option>
+        )}
+        {models.map((model) => (
+          <option key={model.id} value={model.id}>
+            {model.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+interface ErrorBoundaryState {
+  error: Error | null
+}
+
+export class ErrorBoundary extends Component<
+  { children: ReactNode },
+  ErrorBoundaryState
+> {
+  override state: ErrorBoundaryState = { error: null }
+
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return {
+      error:
+        error instanceof Error ? error : (
+          new Error("An unexpected interface error occurred.")
+        ),
+    }
+  }
+
+  override render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="app-error-boundary" role="alert">
+        <div className="panel error-boundary-panel">
+          <EmptyState
+            icon={TriangleAlert}
+            title="Copilot Proxy hit a display error"
+            action={
+              <div className="error-boundary-actions">
+                <Button
+                  variant="primary"
+                  icon={RefreshCw}
+                  onClick={() => {
+                    globalThis.location.reload()
+                  }}
+                >
+                  Reload window
+                </Button>
+                <Button
+                  onClick={() => {
+                    this.setState({ error: null })
+                  }}
+                >
+                  Try again
+                </Button>
+              </div>
+            }
+          >
+            {this.state.error.message || "Reload the window to recover."}
+          </EmptyState>
+        </div>
+      </div>
+    )
+  }
+}

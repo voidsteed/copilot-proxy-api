@@ -40,6 +40,7 @@ import {
   writeResponsesAsAnthropicStream,
 } from "./responses-bridge"
 import {
+  finishAnthropicStream,
   translateChunkToAnthropicEvents,
   translateErrorToAnthropicErrorEvent,
 } from "./stream-translation"
@@ -280,6 +281,7 @@ function handleStreamingChatCompletion(
 ) {
   return streamSSE(c, async (stream) => {
     const streamState: AnthropicStreamState = {
+      completion: { kind: "streaming" },
       messageStartSent: false,
       contentBlockIndex: 0,
       contentBlockOpen: false,
@@ -346,6 +348,9 @@ async function forwardChatCompletionStream(
     )) {
       await stream.writeSSE({ event: event.type, data: JSON.stringify(event) })
     }
+  }
+  for (const event of finishAnthropicStream(options.streamState)) {
+    await stream.writeSSE({ event: event.type, data: JSON.stringify(event) })
   }
 }
 
@@ -447,7 +452,12 @@ async function closeStartedMessage(
   stream: SSEStream,
   streamState: AnthropicStreamState,
 ) {
-  if (!streamState.messageStartSent) return
+  if (
+    !streamState.messageStartSent
+    || streamState.completion.kind === "complete"
+  )
+    return
+  streamState.completion = { kind: "complete" }
 
   await stream.writeSSE({
     event: "message_delta",
