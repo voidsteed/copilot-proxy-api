@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -25,8 +26,6 @@ const local = Bun.serve({ port: 0, idleTimeout: 0, fetch: server.fetch })
 const directory = await mkdtemp(path.join(tmpdir(), "codex-smoke-"))
 const image = path.resolve(import.meta.dir, "../docs/assets/social-preview.png")
 const common = [
-  "--ignore-user-config",
-  "--ignore-rules",
   "--skip-git-repo-check",
   "--json",
   "--sandbox",
@@ -50,7 +49,7 @@ const common = [
 async function run(
   args: Array<string>,
 ): Promise<Array<Record<string, unknown>>> {
-  const child = Bun.spawn(["codex", "exec", ...args], {
+  const child = Bun.spawn([process.env.CODEX_BIN ?? "codex", "exec", ...args], {
     env: { ...process.env, CODEX_HOME: directory },
     stdout: "pipe",
     stderr: "pipe",
@@ -108,6 +107,26 @@ try {
   if (!/copilot/i.test(JSON.stringify(vision)))
     throw new Error("Image title was not recognized")
   console.log("PASS: Codex image input")
+  const logsPath = path.join(directory, "logs_2.sqlite")
+  if (await Bun.file(logsPath).exists()) {
+    // Older Desktop bundles leave WAL databases without shared-memory files;
+    // SQLite needs write access to create those in this isolated test directory.
+    const logs = new Database(logsPath)
+    try {
+      const mismatch = logs
+        .query(
+          "SELECT count(*) AS count FROM logs WHERE feedback_log_body LIKE '%item completed without a recorded start timestamp%'",
+        )
+        .get() as { count: number }
+      if (mismatch.count > 0)
+        throw new Error(
+          `Codex reported ${mismatch.count} item lifecycle warnings`,
+        )
+      console.log("PASS: Codex logs contain no item identity mismatch warnings")
+    } finally {
+      logs.close()
+    }
+  }
   const cancellation = new AbortController()
   const pending = fetch(`http://localhost:${local.port}/v1/responses`, {
     method: "POST",

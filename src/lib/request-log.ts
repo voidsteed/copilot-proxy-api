@@ -3,6 +3,12 @@ import type { Context, MiddlewareHandler } from "hono"
 import consola from "consola"
 import { colors } from "consola/utils"
 
+import {
+  extractRequestClientInfo,
+  formatClientLabel,
+  replaceControlCharacters,
+  type RequestClientInfo,
+} from "./client-info"
 import { isGeminiInferencePath } from "./inference-path"
 import { state } from "./state"
 
@@ -24,6 +30,7 @@ interface RequestLogMetadata {
 
 interface RequestLogState extends RequestLogMetadata {
   cachedTokens?: number
+  client?: RequestClientInfo
   error?: string
   finished: boolean
   inputTokens?: number
@@ -50,6 +57,7 @@ export interface CompletedRequestSummary {
 
 interface RequestLogSummary extends RequestLogMetadata {
   cachedTokens?: number
+  client?: RequestClientInfo
   contextLimit?: number
   durationMs: number
   error?: string
@@ -71,10 +79,6 @@ interface FinishRequestLogOptions {
 
 type LogWriter = (line: string) => void
 
-/** Control characters (C0, DEL, C1) that could forge log lines or drive a terminal. */
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F-\u009F]/g
-
 const requestLogStates = new WeakMap<Context, RequestLogState>()
 
 export function setRequestLogMetadata(
@@ -94,6 +98,7 @@ export function createRequestLogMiddleware(
 ): MiddlewareHandler {
   return async (c, next) => {
     const requestState: RequestLogState = {
+      client: extractRequestClientInfo(c),
       finished: false,
       startedAt: new Date().toISOString(),
       startedAtMs: performance.now(),
@@ -306,6 +311,12 @@ export function formatRequestLogLine(summary: RequestLogSummary): string {
   segments.push(`total ${colors.green(e2e)}`)
 
   if (summary.error) segments.push(colors.red(summary.error))
+
+  if (summary.status >= 400 || Boolean(summary.error)) {
+    const clientLabel = formatClientLabel(summary.client)
+    if (clientLabel) segments.push(`client ${colors.dim(clientLabel)}`)
+  }
+
   return segments.join(" │ ")
 }
 
@@ -421,7 +432,10 @@ class ResponseMetricsObserver {
       if (this.completionProtocol === "gemini" && isGeminiTerminalEvent(event))
         this.hasTerminalResponseEvent = true
       if (isRecord(event) && event.error)
-        this.requestState.error = "Response stream failed"
+        this.requestState.error =
+          this.completionProtocol === "gemini" ?
+            formatGeminiStreamError(event.error)
+          : "Response stream failed"
       if (
         this.completionProtocol === "responses"
         || (isRecord(event) && event.type === "error")
@@ -472,18 +486,33 @@ function resolveCompletionProtocol(
   return undefined
 }
 
+function formatGeminiStreamError(error: unknown): string {
+  if (!isRecord(error)) return "Response stream failed"
+  const parts: Array<string> = []
+  if (typeof error.code === "number" && Number.isInteger(error.code))
+    parts.push(String(error.code))
+  if (typeof error.status === "string" && /^[A-Z_]{1,40}$/.test(error.status))
+    parts.push(error.status)
+  return parts.length > 0 ?
+      `Response stream failed (${parts.join(" ")})`
+    : "Response stream failed"
+}
+
 function isGeminiTerminalEvent(event: unknown): boolean {
   if (!isRecord(event)) return false
   if (
     isRecord(event.promptFeedback)
     && typeof event.promptFeedback.blockReason === "string"
+    && event.promptFeedback.blockReason.trim().length > 0
   )
     return true
   return (
     Array.isArray(event.candidates)
     && event.candidates.some(
       (candidate: unknown) =>
-        isRecord(candidate) && typeof candidate.finishReason === "string",
+        isRecord(candidate)
+        && typeof candidate.finishReason === "string"
+        && candidate.finishReason.trim().length > 0,
     )
   )
 }
@@ -598,6 +627,7 @@ function finishRequestLog(options: FinishRequestLogOptions): void {
         method: c.req.method,
         path: c.req.path,
         status,
+        client: requestState.client,
         model: requestState.model,
         effort: requestState.effort,
         inputTokens: requestState.inputTokens,
@@ -640,7 +670,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 function padColumn(value: unknown, width: number): string {
   const text = typeof value === "string" ? value : String(value)
-  const safe = text.replaceAll(CONTROL_CHARACTERS, "\u00b7")
+  const safe = replaceControlCharacters(text)
   if (safe.length <= width) return safe.padEnd(width)
   return `${safe.slice(0, Math.max(1, width - 1))}…`
 }

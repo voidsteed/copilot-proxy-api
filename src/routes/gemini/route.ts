@@ -1,5 +1,6 @@
 import type { Context } from "hono"
 
+import consola from "consola"
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 
@@ -47,7 +48,8 @@ function errorBody(error: unknown) {
   }
   let code = 502
   if (error instanceof GeminiError) code = error.status
-  else if (error instanceof HTTPError) code = error.response.status
+  else if (error instanceof HTTPError)
+    code = error.response.status === 499 ? 503 : error.response.status
   else if (error instanceof Error && error.name === "AbortError") code = 499
   const messages = new Map([
     [413, "Request payload exceeds the maximum allowed size"],
@@ -193,8 +195,13 @@ async function generate(c: Context) {
         for (const output of translated.complete())
           await stream.writeSSE({ data: JSON.stringify(output) })
     } catch (error) {
-      if (!controller.signal.aborted)
-        await stream.writeSSE({ data: JSON.stringify(errorBody(error)) })
+      if (!controller.signal.aborted) {
+        const body = errorBody(error)
+        consola.warn(
+          `Gemini stream error (${model.id}): ${body.error.code} ${body.error.status} - ${body.error.message}`,
+        )
+        await stream.writeSSE({ data: JSON.stringify(body) })
+      }
     } finally {
       controller.abort()
       c.req.raw.signal.removeEventListener("abort", abort)

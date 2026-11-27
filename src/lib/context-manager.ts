@@ -1,97 +1,80 @@
-/**
- * Context management for Copilot API payloads.
- *
- * Enforces TWO ceilings, whichever is smaller for a given model:
- *   1. Hard byte ceiling (~5 MB) — Copilot's Azure Front Door cliff
- *   2. Token-derived byte ceiling — model's max_prompt_tokens × 3.5 chars
- *
- * The token-derived ceiling prevents `model_max_prompt_tokens_exceeded`
- * rejections on models with stricter caps (e.g. opus-4.7 = 168K tokens),
- * which a 1 MB payload can easily breach.
- *
- * Fast path (~99% of Claude Code requests): byte size check → return.
- * Slow path: prune tool outputs → strip images → drop oldest messages →
- *           byte-based final backstop.
- */
-
 import consola from "consola"
 
 import type {
   ChatCompletionsPayload,
+  ContentPart,
   Message,
 } from "~/services/copilot/create-chat-completions"
 import type { Model } from "~/services/copilot/get-models"
 
 import { getKnownModelPromptLimit } from "./model-limits"
+import {
+  type ConversationTurnGroup,
+  HISTORY_OMITTED_USER_MESSAGE,
+  IMAGE_LIMIT_PLACEHOLDER,
+  IMAGE_STRIPPED_PLACEHOLDER,
+  normalizeMessageParts,
+  partitionTurnGroups,
+  stripOrphanedArtifacts,
+} from "./turn-groups"
 
-// ── Configuration ───────────────────────────────────────────────────────────
+export { TOOL_IMAGE_HEADER } from "./turn-groups"
 
-/**
- * Hard byte ceiling for Copilot. Empirically the cliff is at ~5.4 MB for
- * Azure Front Door; we set the proxy ceiling at 5,000,000 to leave ~400 KB
- * headroom for headers, tool definitions, and downstream JSON framing.
- *
- * Why 5 MB and not 2.5 MB (v0.9.1-v0.10.2 value):
- *   The 2.5 MB ceiling fired aggressively on normal Claude Code sessions
- *   (typical 6 MB → 0.9 MB prune per turn). The pruned payload causes
- *   Copilot to report a small prompt_tokens count, which Claude Code uses
- *   to compute its local context estimate via tokenCountWithEstimation.
- *   Because Claude Code's local message array still holds the full unpruned
- *   conversation, its local count climbs by the rough delta each turn until
- *   it hits the blocking limit (window - 3K) and Claude Code emits
- *   "Context limit reached" via the preempt path in query.ts:641 — without
- *   ever calling our proxy, so auto-compact never fires.
- *
- *   Raising the ceiling to 5 MB lets normal payloads pass through unmodified.
- *   Copilot then returns honest prompt_tokens, and Claude Code's auto-compact
- *   threshold (window - 13K) trips on schedule. Pruning still kicks in as a
- *   last-resort safety net for genuinely oversized payloads (≥5 MB), which
- *   is rare in normal Claude Code use.
- *
- *   This restores the v0.8.0 behavior (no proxy-side context manager) which
- *   the user reports worked reliably for auto-compact.
- */
-const MAX_PAYLOAD_BYTES = 5_000_000
+// Copilot rejects payloads above 5 MiB (5,242,880 bytes); 5 MB leaves framing headroom.
+export const MAX_PAYLOAD_BYTES = 5_000_000
 
-/** Conservative ceiling for custom Claude Code aliases / effort modes that do
- *  not appear in Copilot model metadata. Copilot can hang for minutes in the
- *  2.5-5 MB range, so unknown models stay below that dead zone. */
+// Unknown aliases stay below Copilot's 2.5-5.3 MB hang dead zone.
 export const UNKNOWN_MODEL_PAYLOAD_BYTES = 1_900_000
 
-/** Minimum protected byte budget for recent tool outputs before pruning. */
 const PRUNE_PROTECT_BYTES = 200_000
-
-/** Don't prune unless we'd reclaim at least this many bytes. */
 const PRUNE_MINIMUM_BYTES = 50_000
-
-/** Per-message hard cap for tool output content even when "recent". A single
- *  giant Read of a 1MB file shouldn't blow the budget by itself. */
 const TOOL_OUTPUT_HARD_CAP = 100_000
-
-/**
- * Empirical chars/token ratio for Claude Code payloads. Used to derive a
- * byte ceiling from the model's `max_prompt_tokens` without paying for a
- * real tokenizer pass. Real ratios on typical code-heavy Claude Code traffic
- * sit in the 3.0-3.8 range (English prose ~4.0, dense code ~3.0). We pick
- * 3.5 as a slightly conservative midpoint — it errs toward pruning a touch
- * earlier rather than letting Copilot reject. Cost: one multiplication per
- * request vs. ~300-1000ms for a real tokenizer pass on the hot path.
- */
 const CHARS_PER_TOKEN_ESTIMATE = 3.5
-
-/**
- * Reserve this many tokens under max_prompt_tokens for max_tokens output and
- * Copilot framing overhead (function-call encoding, message-wrapping tokens).
- * Copilot's reported prompt_token count typically runs a few thousand higher
- * than ours due to encoding differences; this buffer absorbs that skew.
- */
 const TOKEN_RESERVE = 8_000
 
 const PRUNED_PLACEHOLDER = "[content pruned — tool output was too old]"
 const TOOL_TRUNCATED_SUFFIX = "\n\n[…tool output truncated to fit context]"
-const IMAGE_STRIPPED_PLACEHOLDER = "[image removed to save context]"
-const IMAGE_LIMIT_PLACEHOLDER =
-  "[earlier image omitted to fit Copilot's image limit]"
+
+export interface PreparedWireRequest {
+  payload: ChatCompletionsPayload
+  body: string
+  utf8Bytes: number
+  enableVision: boolean
+}
+
+type FitPolicy =
+  | { kind: "wire"; wireCeiling: number }
+  | { kind: "dual"; estimatedCeiling: number; wireCeiling: number }
+
+interface ImageLocation {
+  msgIndex: number
+  partIndex: number
+}
+
+interface ReductionResult {
+  payload: ChatCompletionsPayload
+  wireBytes: number
+}
+
+interface ReductionStage {
+  label: string
+  level: "info" | "warn"
+  run: (current: ChatCompletionsPayload, wireBytes: number) => ReductionResult
+}
+
+function jsonUtf8Bytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8")
+}
+
+function measureWireBytes(payload: ChatCompletionsPayload): number {
+  return jsonUtf8Bytes(payload)
+}
+
+function getEffectiveCeiling(policy: FitPolicy): number {
+  return policy.kind === "dual" ?
+      Math.min(policy.estimatedCeiling, policy.wireCeiling)
+    : policy.wireCeiling
+}
 
 function decodedDataUrlBytes(url: string): number | undefined {
   const marker = ";base64,"
@@ -102,17 +85,6 @@ function decodedDataUrlBytes(url: string): number | undefined {
   if (base64.endsWith("==")) padding = 2
   else if (base64.endsWith("=")) padding = 1
   return Math.max(0, Math.floor((base64.length * 3) / 4) - padding)
-}
-
-function normalizeMessageParts(msg: Message): Message {
-  if (!Array.isArray(msg.content)) return msg
-  if (msg.content.some((part) => part.type === "image_url")) return msg
-  return {
-    ...msg,
-    content: msg.content
-      .map((part) => (part.type === "text" ? part.text : ""))
-      .join("\n\n"),
-  }
 }
 
 function stripOversizedImages(
@@ -167,12 +139,7 @@ function stripExcessOldImages(
   return { messages: next, stripped }
 }
 
-/**
- * Enforce Copilot's advertised per-request vision limits (`max_prompt_images`
- * and `max_prompt_image_size`) so long multimodal sessions keep the newest
- * images instead of failing upstream with HTTP 400 `too many images`.
- */
-export function enforceVisionImageLimits(
+function enforceVisionImageLimits(
   payload: ChatCompletionsPayload,
   model: Model,
 ): ChatCompletionsPayload {
@@ -182,14 +149,7 @@ export function enforceVisionImageLimits(
   const hasLimit =
     (maxImages !== undefined && maxImages > 0)
     || (maxImageBytes !== undefined && maxImageBytes > 0)
-  if (!hasLimit) return payload
-
-  const hasImage = payload.messages.some(
-    (msg) =>
-      Array.isArray(msg.content)
-      && msg.content.some((part) => part.type === "image_url"),
-  )
-  if (!hasImage) return payload
+  if (!hasLimit || !hasVisionImages(payload)) return payload
 
   let messages = payload.messages
   let oversized = 0
@@ -212,123 +172,160 @@ export function enforceVisionImageLimits(
   return { ...payload, messages }
 }
 
-// ── Public API ──────────────────────────────────────────────────────────────
+function hasVisionImages(payload: ChatCompletionsPayload): boolean {
+  return payload.messages.some(
+    (msg) =>
+      Array.isArray(msg.content)
+      && msg.content.some((part) => part.type === "image_url"),
+  )
+}
 
-/**
- * Compute the effective byte ceiling for a given model.
- *
- * The proxy enforces TWO ceilings and uses whichever is smaller:
- *
- *   1. The hard byte ceiling MAX_PAYLOAD_BYTES (~5 MB) — Copilot's Azure
- *      Front Door rejects payloads >5.4 MB regardless of token count.
- *
- *   2. A token-derived byte ceiling — Copilot ALSO rejects when the
- *      tokenized prompt exceeds the model's `max_prompt_tokens` cap, which
- *      varies per model (e.g. claude-opus-4.7 = 168K, others = 200K). A 1 MB
- *      payload on opus-4.7 can easily contain 169K tokens and get rejected
- *      with `model_max_prompt_tokens_exceeded`. To prevent that, we estimate
- *      a byte budget from the token cap using a fixed chars/token ratio.
- *
- * If `max_prompt_tokens` is missing from model metadata, we fall back to
- * MAX_PAYLOAD_BYTES alone (existing behavior, no regression).
- */
-function computeEffectiveCeiling(model: Model): number {
+function computeTokenDerivedCeiling(model: Model): number | undefined {
   const maxPromptTokens = getKnownModelPromptLimit(
     model.id,
     model.capabilities.limits,
   )
-  if (!maxPromptTokens) return MAX_PAYLOAD_BYTES
-  const tokenDerivedBytes = Math.floor(
+  if (!maxPromptTokens) return undefined
+  return Math.floor(
     (maxPromptTokens - TOKEN_RESERVE) * CHARS_PER_TOKEN_ESTIMATE,
   )
-  return Math.min(MAX_PAYLOAD_BYTES, tokenDerivedBytes)
 }
 
-/**
- * Fit a payload within the model's effective byte ceiling. Returns the input
- * payload unmodified in the common case (cheap byte size check).
- */
+export function prepareChatCompletionsWireRequest(
+  payload: ChatCompletionsPayload,
+  model?: Model,
+): PreparedWireRequest {
+  const bounded = model ? enforceVisionImageLimits(payload, model) : payload
+  const initialBody = JSON.stringify(bounded)
+  const initialUtf8Bytes = Buffer.byteLength(initialBody, "utf8")
+
+  if (initialUtf8Bytes <= MAX_PAYLOAD_BYTES) {
+    return {
+      payload: bounded,
+      body: initialBody,
+      utf8Bytes: initialUtf8Bytes,
+      enableVision: hasVisionImages(bounded),
+    }
+  }
+
+  const fitted = fitPayload(
+    bounded,
+    {
+      kind: "wire",
+      wireCeiling: MAX_PAYLOAD_BYTES,
+    },
+    initialUtf8Bytes,
+  )
+  const body = JSON.stringify(fitted)
+  const utf8Bytes = Buffer.byteLength(body, "utf8")
+
+  return {
+    payload: fitted,
+    body,
+    utf8Bytes,
+    enableVision: hasVisionImages(fitted),
+  }
+}
+
 export function fitContext(
   payload: ChatCompletionsPayload,
   model: Model,
 ): ChatCompletionsPayload {
-  const boundedVision = enforceVisionImageLimits(payload, model)
-  const ceiling = computeEffectiveCeiling(model)
-  return fitPayloadToCeiling(boundedVision, ceiling)
+  const bounded = enforceVisionImageLimits(payload, model)
+  const tokenCeiling = computeTokenDerivedCeiling(model)
+  const policy: FitPolicy =
+    tokenCeiling !== undefined && tokenCeiling < MAX_PAYLOAD_BYTES ?
+      {
+        kind: "dual",
+        estimatedCeiling: tokenCeiling,
+        wireCeiling: MAX_PAYLOAD_BYTES,
+      }
+    : { kind: "wire", wireCeiling: MAX_PAYLOAD_BYTES }
+  return fitPayload(bounded, policy)
 }
 
 export function fitUnknownModelContext(
   payload: ChatCompletionsPayload,
 ): ChatCompletionsPayload {
-  return fitPayloadToCeiling(payload, UNKNOWN_MODEL_PAYLOAD_BYTES)
+  return fitPayload(payload, {
+    kind: "wire",
+    wireCeiling: UNKNOWN_MODEL_PAYLOAD_BYTES,
+  })
 }
 
 export function isPayloadOverUnknownModelCeiling(
   payload: ChatCompletionsPayload,
 ): boolean {
-  return estimatePayloadBytes(payload) > UNKNOWN_MODEL_PAYLOAD_BYTES
+  return measureWireBytes(payload) > UNKNOWN_MODEL_PAYLOAD_BYTES
 }
 
-function fitPayloadToCeiling(
+function runTransformStage(
+  current: ChatCompletionsPayload,
+  wireBytes: number,
+  transform: (payload: ChatCompletionsPayload) => ChatCompletionsPayload,
+): ReductionResult {
+  const next = transform(current)
+  if (next === current) return { payload: current, wireBytes }
+  return { payload: next, wireBytes: measureWireBytes(next) }
+}
+
+function fitPayload(
   payload: ChatCompletionsPayload,
-  ceiling: number,
+  policy: FitPolicy,
+  knownWireBytes?: number,
 ): ChatCompletionsPayload {
-  const initialBytes = estimatePayloadBytes(payload)
+  const initialBytes = knownWireBytes ?? measureWireBytes(payload)
+  if (fitsPolicy(payload, policy, initialBytes)) return payload
 
-  // Fast path: well under the effective ceiling — just send.
-  if (initialBytes <= ceiling) {
-    return payload
-  }
-
+  const effectiveCeiling = getEffectiveCeiling(policy)
   consola.info(
-    `Context fit: payload ${formatBytes(initialBytes)} exceeds ${formatBytes(ceiling)} ceiling — reducing`,
+    `Context fit: payload ${formatBytes(initialBytes)} exceeds ${formatBytes(effectiveCeiling)} ceiling; reducing`,
   )
 
-  // Slow path: progressive byte-based reduction.
-  let current = pruneToolOutputs(payload)
-  let bytes = estimatePayloadBytes(current)
-  if (bytes <= ceiling) {
-    consola.info(
-      `Context fit: ${formatBytes(initialBytes)} → ${formatBytes(bytes)} after tool pruning`,
-    )
-    return current
+  const stripImagesStage: ReductionStage = {
+    label: "stripping images",
+    level: "info",
+    run: (current, wireBytes) => stripImagesToFit(current, policy, wireBytes),
+  }
+  const pruneStage: ReductionStage = {
+    label: "tool pruning",
+    level: "info",
+    run: (current, wireBytes) =>
+      runTransformStage(current, wireBytes, pruneToolOutputs),
+  }
+  const truncateStage: ReductionStage = {
+    label: "truncating oversized tool outputs",
+    level: "warn",
+    run: (current, wireBytes) =>
+      runTransformStage(current, wireBytes, truncateOversizedToolOutputs),
   }
 
-  current = stripOldImages(current)
-  bytes = estimatePayloadBytes(current)
-  if (bytes <= ceiling) {
-    consola.info(
-      `Context fit: ${formatBytes(initialBytes)} → ${formatBytes(bytes)} after stripping old images`,
-    )
-    return current
+  const preDropStages =
+    policy.kind === "wire" ?
+      [stripImagesStage, pruneStage, truncateStage]
+    : [pruneStage, stripImagesStage, truncateStage]
+
+  let current = payload
+  let wireBytes = initialBytes
+
+  for (const stage of preDropStages) {
+    const next = stage.run(current, wireBytes)
+    if (next.payload === current) continue
+    current = next.payload
+    wireBytes = next.wireBytes
+    if (fitsPolicy(current, policy, wireBytes)) {
+      consola[stage.level](
+        `Context fit: ${formatBytes(initialBytes)} -> ${formatBytes(wireBytes)} after ${stage.label}`,
+      )
+      return current
+    }
   }
 
-  // Aggressive: strip ALL images regardless of age.
-  current = stripAllImages(current)
-  bytes = estimatePayloadBytes(current)
-  if (bytes <= ceiling) {
-    consola.warn(
-      `Context fit: ${formatBytes(initialBytes)} → ${formatBytes(bytes)} after stripping ALL images`,
-    )
-    return current
-  }
-
-  // Truncate any oversized tool outputs that survived pruning (e.g. recent ones).
-  current = truncateOversizedToolOutputs(current)
-  bytes = estimatePayloadBytes(current)
-  if (bytes <= ceiling) {
-    consola.warn(
-      `Context fit: ${formatBytes(initialBytes)} → ${formatBytes(bytes)} after truncating oversized tool outputs`,
-    )
-    return current
-  }
-
-  current = dropOldMessages(current, ceiling)
-  bytes = estimatePayloadBytes(current)
+  const dropped = dropOldTurnGroups(current, policy, wireBytes)
   consola.warn(
-    `Context fit: ${formatBytes(initialBytes)} → ${formatBytes(bytes)} after dropping old messages`,
+    `Context fit: ${formatBytes(initialBytes)} -> ${formatBytes(dropped.wireBytes)} after dropping old turn groups`,
   )
-  return current
+  return dropped.payload
 }
 
 function formatBytes(b: number): string {
@@ -337,39 +334,63 @@ function formatBytes(b: number): string {
   return `${(b / 1024 / 1024).toFixed(2)}MB`
 }
 
-// ── Byte estimation ─────────────────────────────────────────────────────────
+function fitsPolicy(
+  payload: ChatCompletionsPayload,
+  policy: FitPolicy,
+  knownWireBytes?: number,
+): boolean {
+  if (
+    policy.kind === "dual"
+    && estimatePayloadBytes(payload) > policy.estimatedCeiling
+  ) {
+    return false
+  }
+  return (knownWireBytes ?? measureWireBytes(payload)) <= policy.wireCeiling
+}
 
-/**
- * Cheap byte-size estimate for a payload. Uses content lengths directly
- * instead of JSON.stringify, which is ~10x faster on large payloads. The
- * estimate is a lower bound (ignores JSON framing overhead) but accurate
- * to within a few percent for realistic Claude Code payloads.
- */
 function estimatePayloadBytes(payload: ChatCompletionsPayload): number {
-  let bytes = 200 // baseline for top-level JSON framing
+  let bytes = 200
   for (const msg of payload.messages) {
     bytes += estimateMessageBytes(msg)
   }
   if (payload.tools) {
     for (const tool of payload.tools) {
-      // Tool definitions are dense JSON; conservatively double-count via stringify.
       bytes += JSON.stringify(tool).length + 20
     }
   }
   return bytes
 }
 
+function estimateContentPartBytes(part: unknown): number {
+  if (typeof part === "object" && part !== null && "type" in part) {
+    if (
+      part.type === "text"
+      && "text" in part
+      && typeof part.text === "string"
+    ) {
+      return part.text.length + 20
+    }
+    if (
+      part.type === "image_url"
+      && "image_url" in part
+      && typeof part.image_url === "object"
+      && part.image_url !== null
+      && "url" in part.image_url
+      && typeof part.image_url.url === "string"
+    ) {
+      return part.image_url.url.length + 40
+    }
+  }
+  return JSON.stringify(part).length + 20
+}
+
 function estimateMessageBytes(msg: Message): number {
-  let bytes = 40 // role + framing
+  let bytes = 40
   if (typeof msg.content === "string") {
     bytes += msg.content.length
   } else if (Array.isArray(msg.content)) {
     for (const part of msg.content) {
-      if ("text" in part && typeof part.text === "string") {
-        bytes += part.text.length + 20
-      } else if ("type" in part && part.type === "image_url") {
-        bytes += part.image_url.url.length + 40
-      }
+      bytes += estimateContentPartBytes(part)
     }
   }
   if (msg.tool_calls) {
@@ -383,7 +404,18 @@ function estimateMessageBytes(msg: Message): number {
   return bytes
 }
 
-// ── Reduction step 1: prune old tool outputs ────────────────────────────────
+function isJsonObjectString(content: string): boolean {
+  const trimmed = content.trim()
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return false
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    return (
+      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    )
+  } catch {
+    return false
+  }
+}
 
 function pruneToolOutputs(
   payload: ChatCompletionsPayload,
@@ -393,12 +425,14 @@ function pruneToolOutputs(
   let prunedBytes = 0
   const prunedIndices: Array<number> = []
 
-  // Walk newest → oldest, protecting recent tool outputs.
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]
     if (msg.role !== "tool") continue
 
-    const msgBytes = estimateMessageBytes(msg)
+    const msgBytes =
+      typeof msg.content === "string" ?
+        Buffer.byteLength(msg.content, "utf8") + 40
+      : estimateMessageBytes(msg)
     if (protectedBytes < PRUNE_PROTECT_BYTES) {
       protectedBytes += msgBytes
     } else {
@@ -407,13 +441,19 @@ function pruneToolOutputs(
     }
   }
 
-  if (prunedBytes < PRUNE_MINIMUM_BYTES) {
-    return payload
-  }
+  if (prunedBytes < PRUNE_MINIMUM_BYTES) return payload
 
   const newMessages = [...messages]
   for (const idx of prunedIndices) {
-    newMessages[idx] = { ...newMessages[idx], content: PRUNED_PLACEHOLDER }
+    const currentMsg = newMessages[idx]
+    const replacement =
+      (
+        typeof currentMsg.content === "string"
+        && isJsonObjectString(currentMsg.content)
+      ) ?
+        JSON.stringify({ output: PRUNED_PLACEHOLDER })
+      : PRUNED_PLACEHOLDER
+    newMessages[idx] = { ...currentMsg, content: replacement }
   }
 
   consola.info(
@@ -422,76 +462,140 @@ function pruneToolOutputs(
   return { ...payload, messages: newMessages }
 }
 
-// ── Reduction step 2: strip base64 images from older messages ───────────────
+function collectImageLocations(messages: Array<Message>): Array<ImageLocation> {
+  const locations: Array<ImageLocation> = []
+  for (const [msgIndex, msg] of messages.entries()) {
+    if (!Array.isArray(msg.content)) continue
+    for (const [partIndex, part] of msg.content.entries()) {
+      if (part.type === "image_url") {
+        locations.push({ msgIndex, partIndex })
+      }
+    }
+  }
+  return locations
+}
 
-function stripOldImages(
+function stripImagesToFit(
   payload: ChatCompletionsPayload,
-): ChatCompletionsPayload {
-  const messages = payload.messages
-  const newMessages = [...messages]
+  policy: FitPolicy,
+  currentWireBytes: number,
+): ReductionResult {
+  const locations = collectImageLocations(payload.messages)
+  if (locations.length === 0) {
+    return { payload, wireBytes: currentWireBytes }
+  }
+
+  const messages = [...payload.messages]
+  let wireBytes = currentWireBytes
   let strippedCount = 0
   let strippedBytes = 0
 
-  // Keep images only in the last 4 messages (recent visual context).
-  const protectFromEnd = 4
-  const protectBoundary = Math.max(0, messages.length - protectFromEnd)
+  for (const { msgIndex, partIndex } of locations) {
+    const prevMsg = messages[msgIndex]
+    if (!Array.isArray(prevMsg.content)) continue
+    const part = prevMsg.content[partIndex]
+    if (part.type !== "image_url") continue
 
-  for (let i = 0; i < protectBoundary; i++) {
-    const msg = messages[i]
-    if (!Array.isArray(msg.content)) continue
-
-    const beforeStripped = strippedCount
-    const newContent = msg.content.map((part) => {
-      if ("type" in part && part.type === "image_url") {
-        strippedCount++
-        strippedBytes += part.image_url.url.length
-        return { type: "text" as const, text: IMAGE_STRIPPED_PLACEHOLDER }
-      }
-      return part
+    const nextContent: Array<ContentPart> = [...prevMsg.content]
+    nextContent[partIndex] = {
+      type: "text",
+      text: IMAGE_STRIPPED_PLACEHOLDER,
+    }
+    const updatedMsg = normalizeMessageParts({
+      ...prevMsg,
+      content: nextContent,
     })
+    wireBytes += jsonUtf8Bytes(updatedMsg) - jsonUtf8Bytes(prevMsg)
+    strippedCount++
+    strippedBytes += Buffer.byteLength(part.image_url.url, "utf8")
+    messages[msgIndex] = updatedMsg
 
-    if (strippedCount > beforeStripped) {
-      newMessages[i] = { ...msg, content: newContent }
+    const candidate = { ...payload, messages }
+    if (fitsPolicy(candidate, policy, wireBytes)) {
+      consola.info(
+        `Stripped ${strippedCount} image(s) (~${strippedBytes} bytes reclaimed)`,
+      )
+      return { payload: candidate, wireBytes }
     }
   }
 
   if (strippedCount > 0) {
-    consola.info(
-      `Stripped ${strippedCount} base64 images (~${strippedBytes} bytes reclaimed)`,
-    )
-  }
-  return { ...payload, messages: newMessages }
-}
-
-// ── Reduction step 2b: strip ALL images regardless of recency ───────────────
-
-function stripAllImages(
-  payload: ChatCompletionsPayload,
-): ChatCompletionsPayload {
-  let strippedCount = 0
-  let strippedBytes = 0
-  const newMessages = payload.messages.map((msg) => {
-    if (!Array.isArray(msg.content)) return msg
-    const before = strippedCount
-    const newContent = msg.content.map((part) => {
-      if ("type" in part && part.type === "image_url") {
-        strippedCount++
-        strippedBytes += part.image_url.url.length
-        return { type: "text" as const, text: IMAGE_STRIPPED_PLACEHOLDER }
-      }
-      return part
-    })
-    return strippedCount > before ? { ...msg, content: newContent } : msg
-  })
-  if (strippedCount > 0) {
     consola.warn(
-      `Stripped ${strippedCount} ALL images (~${strippedBytes} bytes reclaimed)`,
+      `Stripped all ${strippedCount} image(s) (~${strippedBytes} bytes reclaimed)`,
     )
   }
-  return { ...payload, messages: newMessages }
+  return { payload: { ...payload, messages }, wireBytes }
 }
 
-// ── Reduction step 2c: truncate oversized tool outputs ──────────────────────
+function utf8CodePointBytes(codePoint: number): number {
+  if (codePoint <= 0x7f) return 1
+  if (codePoint <= 0x7ff) return 2
+  if (codePoint <= 0xffff) return 3
+  return 4
+}
+
+function jsonEscapedCodePointBytes(codePoint: number): number {
+  if (
+    codePoint === 0x22
+    || codePoint === 0x5c
+    || codePoint === 0x08
+    || codePoint === 0x0c
+    || codePoint === 0x0a
+    || codePoint === 0x0d
+    || codePoint === 0x09
+  ) {
+    return 2
+  }
+  if (codePoint < 0x20 || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+    return 6
+  }
+  return utf8CodePointBytes(codePoint)
+}
+
+function truncateUtf8ByCost(
+  text: string,
+  maxBytes: number,
+  byteCost: (codePoint: number) => number,
+): string {
+  if (maxBytes <= 0) return ""
+  let bytes = 0
+  let index = 0
+  while (index < text.length) {
+    const codePoint = text.codePointAt(index)
+    if (codePoint === undefined) break
+    const cost = byteCost(codePoint)
+    if (bytes + cost > maxBytes) break
+    bytes += cost
+    index += codePoint > 0xffff ? 2 : 1
+  }
+  return text.slice(0, index)
+}
+
+function truncateToolContent(content: string): string {
+  if (isJsonObjectString(content)) {
+    const wrapperBytes = Buffer.byteLength(
+      JSON.stringify({ truncated: true, output: TOOL_TRUNCATED_SUFFIX }),
+      "utf8",
+    )
+    const prefix = truncateUtf8ByCost(
+      content,
+      Math.max(0, TOOL_OUTPUT_HARD_CAP - wrapperBytes),
+      jsonEscapedCodePointBytes,
+    )
+    return JSON.stringify({
+      truncated: true,
+      output: prefix + TOOL_TRUNCATED_SUFFIX,
+    })
+  }
+
+  const suffixBytes = Buffer.byteLength(TOOL_TRUNCATED_SUFFIX, "utf8")
+  const prefix = truncateUtf8ByCost(
+    content,
+    Math.max(0, TOOL_OUTPUT_HARD_CAP - suffixBytes),
+    utf8CodePointBytes,
+  )
+  return prefix + TOOL_TRUNCATED_SUFFIX
+}
 
 function truncateOversizedToolOutputs(
   payload: ChatCompletionsPayload,
@@ -499,90 +603,172 @@ function truncateOversizedToolOutputs(
   let truncatedCount = 0
   let reclaimedBytes = 0
   const newMessages = payload.messages.map((msg) => {
-    if (msg.role !== "tool") return msg
-    if (typeof msg.content !== "string") return msg
-    if (msg.content.length <= TOOL_OUTPUT_HARD_CAP) return msg
-    const before = msg.content.length
-    const truncated =
-      msg.content.slice(0, TOOL_OUTPUT_HARD_CAP) + TOOL_TRUNCATED_SUFFIX
+    if (msg.role !== "tool" || typeof msg.content !== "string") return msg
+    const beforeBytes = Buffer.byteLength(msg.content, "utf8")
+    if (beforeBytes <= TOOL_OUTPUT_HARD_CAP) return msg
+    const truncated = truncateToolContent(msg.content)
     truncatedCount++
-    reclaimedBytes += before - truncated.length
+    reclaimedBytes += beforeBytes - Buffer.byteLength(truncated, "utf8")
     return { ...msg, content: truncated }
   })
-  if (truncatedCount > 0) {
-    consola.warn(
-      `Truncated ${truncatedCount} oversized tool outputs (~${reclaimedBytes} bytes reclaimed)`,
-    )
-  }
+  if (truncatedCount === 0) return payload
+  consola.warn(
+    `Truncated ${truncatedCount} oversized tool outputs (~${reclaimedBytes} bytes reclaimed)`,
+  )
   return { ...payload, messages: newMessages }
 }
 
-// ── Reduction step 3: drop oldest conversation messages ─────────────────────
+function hasHistoryMarker(
+  groups: Array<ConversationTurnGroup>,
+  droppedAny: boolean,
+): boolean {
+  return droppedAny && groups[0]?.messages[0]?.role === "assistant"
+}
 
-function dropOldMessages(
+function buildCandidatePayload(options: {
+  payload: ChatCompletionsPayload
+  systemMessages: Array<Message>
+  groups: Array<ConversationTurnGroup>
+  droppedAny: boolean
+}): ChatCompletionsPayload {
+  const { payload, systemMessages, groups, droppedAny } = options
+  const conversationMessages = groups.flatMap((group) => group.messages)
+  const messages =
+    droppedAny && conversationMessages[0]?.role === "assistant" ?
+      [...systemMessages, HISTORY_OMITTED_USER_MESSAGE, ...conversationMessages]
+    : [...systemMessages, ...conversationMessages]
+  return { ...payload, messages }
+}
+
+function historyMarkerDelta(
+  prevHasMarker: boolean,
+  nextHasMarker: boolean,
+  markerBytes: number,
+): number {
+  if (prevHasMarker === nextHasMarker) return 0
+  return nextHasMarker ? markerBytes : -markerBytes
+}
+
+function tryVerifyCandidate(options: {
+  payload: ChatCompletionsPayload
+  systemMessages: Array<Message>
+  groups: Array<ConversationTurnGroup>
+  droppedAny: boolean
+  policy: FitPolicy
+  trackedWireBytes: number
+}): { result?: ReductionResult; exactBytes?: number } {
+  const {
+    payload,
+    systemMessages,
+    groups,
+    droppedAny,
+    policy,
+    trackedWireBytes,
+  } = options
+  if (trackedWireBytes > policy.wireCeiling) return {}
+  const built = buildCandidatePayload({
+    payload,
+    systemMessages,
+    groups,
+    droppedAny,
+  })
+  if (!fitsPolicy(built, policy, trackedWireBytes)) return {}
+  const exactBytes = measureWireBytes(built)
+  if (!fitsPolicy(built, policy, exactBytes)) return { exactBytes }
+  return { result: { payload: built, wireBytes: exactBytes } }
+}
+
+function dropOldTurnGroups(
   payload: ChatCompletionsPayload,
-  ceiling: number,
-): ChatCompletionsPayload {
-  const systemMessages = payload.messages.filter(
-    (m) => m.role === "system" || m.role === "developer",
-  )
-  const conversationMessages = payload.messages.filter(
-    (m) => m.role !== "system" && m.role !== "developer",
-  )
-
-  // Compute reusable system byte total.
-  let baseBytes = 200
-  for (const m of systemMessages) baseBytes += estimateMessageBytes(m)
-  if (payload.tools) {
-    for (const tool of payload.tools) {
-      baseBytes += JSON.stringify(tool).length + 20
+  policy: FitPolicy,
+  currentWireBytes: number,
+): ReductionResult {
+  const systemMessages: Array<Message> = []
+  const conversationMessages: Array<Message> = []
+  for (const msg of payload.messages) {
+    if (msg.role === "system" || msg.role === "developer") {
+      systemMessages.push(msg)
+    } else {
+      conversationMessages.push(msg)
     }
   }
 
-  // Compute per-message byte sizes once for the conversation tail.
-  const convBytes = conversationMessages.map((m) => estimateMessageBytes(m))
-  let totalBytes = baseBytes + convBytes.reduce((a, b) => a + b, 0)
+  const partitioned = partitionTurnGroups(conversationMessages)
+  const { groups, orphansDropped } = stripOrphanedArtifacts(partitioned)
+  const groupWireBytes = groups.map((group) =>
+    group.messages.reduce((sum, m) => sum + jsonUtf8Bytes(m) + 1, 0),
+  )
+  const historyMarkerBytes = jsonUtf8Bytes(HISTORY_OMITTED_USER_MESSAGE) + 1
 
-  let dropped = 0
-  while (conversationMessages.length > 2 && totalBytes > ceiling) {
-    const removedBytes = convBytes.shift() ?? 0
-    conversationMessages.shift()
-    totalBytes -= removedBytes
-    dropped++
+  let droppedAny = orphansDropped > 0
+  let trackedWireBytes =
+    droppedAny ?
+      measureWireBytes(
+        buildCandidatePayload({
+          payload,
+          systemMessages,
+          groups,
+          droppedAny: true,
+        }),
+      )
+    : currentWireBytes
+  let droppedGroups = 0
+  let droppedMessages = 0
+  let verified: ReductionResult | undefined
+
+  while (groups.length > 1) {
+    const check = tryVerifyCandidate({
+      payload,
+      systemMessages,
+      groups,
+      droppedAny,
+      policy,
+      trackedWireBytes,
+    })
+    if (check.result) {
+      verified = check.result
+      break
+    }
+    if (check.exactBytes !== undefined) trackedWireBytes = check.exactBytes
+
+    const prevHasMarker = hasHistoryMarker(groups, droppedAny)
+    const removed = groups.shift()
+    const removedBytes = groupWireBytes.shift() ?? 0
+    if (!removed) break
+
+    trackedWireBytes -= removedBytes
+    droppedGroups++
+    droppedMessages += removed.messages.length
+    droppedAny = true
+
+    trackedWireBytes += historyMarkerDelta(
+      prevHasMarker,
+      hasHistoryMarker(groups, true),
+      historyMarkerBytes,
+    )
   }
 
-  // Avoid stranding a tool_result whose corresponding tool_use was just
-  // dropped. Copilot/Vertex rejects with "unexpected tool_use_id ... Each
-  // tool_result block must have a corresponding tool_use block in the
-  // previous message." Keep dropping from the front while the new head is
-  // either a `tool` role message OR a user/assistant message whose content
-  // begins with a tool_result/tool_use_id reference. Cheapest heuristic:
-  // drop while head.role === "tool".
-  let orphansDropped = 0
-  while (
-    conversationMessages.length > 2
-    && conversationMessages[0].role === "tool"
-  ) {
-    const removedBytes = convBytes.shift() ?? 0
-    conversationMessages.shift()
-    totalBytes -= removedBytes
-    orphansDropped++
+  if (!verified) {
+    const built = buildCandidatePayload({
+      payload,
+      systemMessages,
+      groups,
+      droppedAny,
+    })
+    verified = { payload: built, wireBytes: measureWireBytes(built) }
   }
 
-  if (dropped > 0 || orphansDropped > 0) {
+  if (droppedAny) {
     consola.warn(
-      `Dropped ${dropped} oldest conversation messages + ${orphansDropped} orphaned tool results (~${totalBytes} bytes remaining, limit ${ceiling})`,
+      `Dropped ${droppedGroups} oldest turn group(s) (${droppedMessages} messages) + ${orphansDropped} orphaned artifact(s)`,
     )
   }
 
-  if (totalBytes > ceiling) {
+  if (!fitsPolicy(verified.payload, policy, verified.wireBytes)) {
     consola.error(
-      `Payload still over ${ceiling}B after all reductions (${totalBytes}B). Forwarding anyway — Copilot will likely return 413 → 400 prompt-too-long for reactive compaction.`,
+      `Payload still over ${getEffectiveCeiling(policy)}B after all reductions (${verified.wireBytes}B); forwarding to upstream`,
     )
   }
 
-  return {
-    ...payload,
-    messages: [...systemMessages, ...conversationMessages],
-  }
+  return verified
 }

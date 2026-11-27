@@ -10,7 +10,7 @@ const inferencePaths = new Set([
 ])
 
 export function isGeminiInferencePath(path: string): boolean {
-  return /^\/v1(?:beta)?\/models\/[\w.-]+:(?:generateContent|streamGenerateContent)$/.test(
+  return /^\/v1(?:beta)?\/models\/[\w.-]+(?::|%3[aA])(?:generateContent|streamGenerateContent)$/.test(
     path,
   )
 }

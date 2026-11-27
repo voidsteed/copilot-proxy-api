@@ -2,42 +2,45 @@ import consola from "consola"
 import { events } from "fetch-event-stream"
 
 import { copilotHeaders, copilotBaseUrl } from "~/lib/api-config"
+import { prepareChatCompletionsWireRequest } from "~/lib/context-manager"
 import {
   copilotFetch,
   isLikelyContextOverflowTimeout,
 } from "~/lib/copilot-fetch"
 import { HTTPError } from "~/lib/error"
-import { createPromptTooLongError } from "~/lib/prompt-too-long"
+import {
+  createPromptTooLongError,
+  matchContextOverflowError,
+} from "~/lib/prompt-too-long"
 import { state } from "~/lib/state"
 
-/* eslint-disable complexity */
 export const createChatCompletions = async (
   payload: ChatCompletionsPayload,
   signal?: AbortSignal,
 ) => {
   if (!state.copilotToken) throw new Error("Copilot token not found")
 
-  const requestPayload = normalizeTokenLimitParameter(payload)
-
-  const enableVision = requestPayload.messages.some(
-    (x) =>
-      typeof x.content !== "string"
-      && x.content?.some((x) => x.type === "image_url"),
+  const isAgentCall = payload.messages.some(
+    (msg) => msg.role === "assistant" || msg.role === "tool",
   )
-
-  // Agent/user check for X-Initiator header
-  const isAgentCall = requestPayload.messages.some((msg) =>
-    ["assistant", "tool"].includes(msg.role),
+  const model = state.models?.data.find((m) => m.id === payload.model)
+  const wireRequest = prepareChatCompletionsWireRequest(
+    normalizeTokenLimitParameter(payload),
+    model,
   )
 
   const headers: Record<string, string> = {
-    ...copilotHeaders(state, enableVision),
+    ...copilotHeaders(state, wireRequest.enableVision),
     "X-Initiator": isAgentCall ? "agent" : "user",
   }
 
-  const body = JSON.stringify(requestPayload)
+  const maxOutputTokens =
+    wireRequest.payload.max_completion_tokens
+    ?? wireRequest.payload.max_tokens
+    ?? 0
+
   consola.debug(
-    `Sending payload: ${body.length} bytes, ${requestPayload.messages.length} messages, model: ${requestPayload.model}`,
+    `Sending payload: ${wireRequest.utf8Bytes} bytes, ${wireRequest.payload.messages.length} messages, model: ${wireRequest.payload.model}`,
   )
 
   let response: Response
@@ -45,12 +48,16 @@ export const createChatCompletions = async (
     response = await copilotFetch(`${copilotBaseUrl(state)}/chat/completions`, {
       method: "POST",
       headers,
-      body,
+      body: wireRequest.body,
       signal,
     })
   } catch (error) {
-    if (isLikelyContextOverflowTimeout(error, body.length)) {
-      throw createPromptTooLongError(requestPayload, body.length)
+    if (isLikelyContextOverflowTimeout(error, wireRequest.utf8Bytes)) {
+      throw createPromptTooLongError({
+        model: wireRequest.payload.model,
+        maxOutputTokens,
+        bodyBytes: wireRequest.utf8Bytes,
+      })
     }
     throw error
   }
@@ -61,43 +68,16 @@ export const createChatCompletions = async (
     consola.error(
       `Failed to create chat completions - Status: ${response.status} ${response.statusText}${errorCode ? ` (${errorCode})` : ""}`,
     )
-    consola.error(`Request payload size: ${body.length} bytes`)
+    consola.error(`Request payload size: ${wireRequest.utf8Bytes} bytes`)
 
-    // Detect context overflow errors. Includes:
-    //  - HTTP 413 from Azure Front Door (>~5.4 MB)
-    //  - Backend "operation timed out" / 500 in the 2.5 MiB - 5.3 MB dead
-    //    zone (Copilot backend hangs >90s instead of cleanly rejecting;
-    //    Bun fetch eventually surfaces this as a 500 or upstream timeout)
-    //  - Various worded variants Copilot has emitted in the past
-    const isContextOverflow =
-      response.status === 413
-      || /request entity too large/i.test(errorBody)
-      || /exceeds the limit of \d+/i.test(errorBody)
-      || /context_length_exceeded/i.test(errorBody)
-      || /operation timed out/i.test(errorBody)
-      || /payload too large/i.test(errorBody)
-      || /maximum context length/i.test(errorBody)
-      || (response.status >= 500
-        && response.status < 600
-        && body.length > 2_000_000)
-
-    if (isContextOverflow) {
-      // Return HTTP 400 with "prompt is too long" so Claude Code's reactive
-      // compaction kicks in (verified from Claude Code source: services/api/
-      // errors.ts triggers tryReactiveCompact on this exact phrase). Returning
-      // 529/overloaded_error would only trigger retry-with-backoff (3 attempts
-      // then fatal "Repeated 529 Overloaded errors").
-      //
-      // Token estimate: bytes/4 is a rough but conservative approximation.
-      // Claude Code uses the gap (estimatedTokens - modelLimit) to decide how
-      // many message groups to peel in a single compaction pass.
-      //
-      // Use max_prompt_tokens (the field Copilot actually enforces — e.g.
-      // 168K for opus-4.7) rather than max_context_window_tokens (the
-      // total window incl. output, ≥200K). Falling back to the larger field
-      // and finally 200K preserves behavior for models lacking metadata.
-      throw createPromptTooLongError(requestPayload, body.length)
-    }
+    const overflowError = matchContextOverflowError({
+      status: response.status,
+      errorBody,
+      bodyBytes: wireRequest.utf8Bytes,
+      model: wireRequest.payload.model,
+      maxOutputTokens,
+    })
+    if (overflowError) throw overflowError
 
     throw new HTTPError(
       "Failed to create chat completions",
