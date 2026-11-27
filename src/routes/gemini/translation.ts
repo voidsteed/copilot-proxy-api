@@ -10,15 +10,19 @@ import type { Model } from "~/services/copilot/get-models"
 
 import { sanitizeLogText } from "~/lib/client-info"
 import { TOOL_IMAGE_HEADER } from "~/lib/context-manager"
-import { HTTPError } from "~/lib/error"
 
 import {
   argumentsSchema,
   GeminiError,
+  normalizeMimeType,
+  SUPPORTED_INLINE_IMAGE_MIME_TYPES,
+  SUPPORTED_INLINE_MEDIA_DESCRIPTION,
   type GenerateRequest,
   type Part,
   type UpstreamResponse,
 } from "./schemas"
+
+export { preprocessGeminiRequest } from "./media"
 
 type Content = GenerateRequest["contents"][number]
 type PendingCall = { id: string; name: string }
@@ -100,112 +104,24 @@ function assistantMessage(
   if (calls.length > 0) message.tool_calls = calls
   return message
 }
-function hasPdfParts(request: GenerateRequest): boolean {
-  return request.contents.some((content) =>
-    content.parts.some(
-      (part) =>
-        ("inlineData" in part && part.inlineData.mimeType === "application/pdf")
-        || ("functionResponse" in part
-          && part.functionResponse.parts?.some(
-            (item) => item.inlineData.mimeType === "application/pdf",
-          ) === true),
-    ),
-  )
-}
-
-async function extractPdfMessage(error: HTTPError): Promise<string> {
-  try {
-    const parsed = (await error.response.clone().json()) as {
-      error?: { message?: unknown }
-    }
-    if (typeof parsed.error?.message === "string") return parsed.error.message
-  } catch {
-    // Fall back to HTTPError message.
-  }
-  return error.message
-}
-
-async function formatPdfText(inlineData: {
-  data: string
-  displayName?: string
-}): Promise<string> {
-  const { extractPdfText } = await import("~/lib/pdf")
-  try {
-    const extracted = await extractPdfText(inlineData.data)
-    const header =
-      inlineData.displayName ? `Document: ${inlineData.displayName}\n\n` : ""
-    const pages = `${extracted.pageCount} page${extracted.pageCount === 1 ? "" : "s"}`
-    const suffix = extracted.truncated ? ", truncated" : ""
-    return `${header}[Extracted text from PDF (${pages}${suffix}):]\n\n${extracted.text}`
-  } catch (error) {
-    if (error instanceof HTTPError)
-      throw new GeminiError(await extractPdfMessage(error), 400)
-    throw error
-  }
-}
-
-async function preprocessPart(part: Part): Promise<Part> {
-  if ("inlineData" in part && part.inlineData.mimeType === "application/pdf")
-    return { text: await formatPdfText(part.inlineData) }
-  if (!("functionResponse" in part) || !part.functionResponse.parts?.length)
-    return part
-
-  const remainingParts: NonNullable<typeof part.functionResponse.parts> = []
-  const extractedDocs: Array<string> = []
-  for (const item of part.functionResponse.parts) {
-    if (item.inlineData.mimeType === "application/pdf")
-      extractedDocs.push(await formatPdfText(item.inlineData))
-    else remainingParts.push(item)
-  }
-  if (extractedDocs.length === 0) return part
-
-  const response = { ...part.functionResponse.response }
-  const existingOutput =
-    typeof response.output === "string" ? response.output : undefined
-  response.output =
-    existingOutput ?
-      `${existingOutput}\n\n${extractedDocs.join("\n\n")}`
-    : extractedDocs.join("\n\n")
-  return {
-    functionResponse: {
-      ...(part.functionResponse.id !== undefined ?
-        { id: part.functionResponse.id }
-      : {}),
-      name: part.functionResponse.name,
-      response,
-      ...(remainingParts.length > 0 ? { parts: remainingParts } : {}),
-    },
-  }
-}
-
-export async function preprocessGeminiRequest(
-  request: GenerateRequest,
-): Promise<GenerateRequest> {
-  if (!hasPdfParts(request)) return request
-  const contents = await Promise.all(
-    request.contents.map(async (content) => ({
-      ...content,
-      parts: await Promise.all(
-        content.parts.map((part) => preprocessPart(part)),
-      ),
-    })),
-  )
-  return { ...request, contents }
-}
-
 function inlineImagePart(
   inlineData: { mimeType: string; data: string },
   vision: boolean,
 ): ContentPart {
-  if (inlineData.mimeType === "application/pdf")
+  const mimeType = normalizeMimeType(inlineData.mimeType)
+  if (mimeType === "application/pdf")
     throw new GeminiError(
       "PDF attachments must be preprocessed before translation",
+    )
+  if (!SUPPORTED_INLINE_IMAGE_MIME_TYPES.has(mimeType))
+    throw new GeminiError(
+      `Unsupported inline media type "${sanitizeLogText(mimeType, 64)}". GitHub Copilot supports ${SUPPORTED_INLINE_MEDIA_DESCRIPTION}.`,
     )
   if (!vision) throw new GeminiError("Selected model does not support images")
   return {
     type: "image_url",
     image_url: {
-      url: `data:${inlineData.mimeType};base64,${inlineData.data}`,
+      url: `data:${mimeType};base64,${inlineData.data}`,
     },
   }
 }
