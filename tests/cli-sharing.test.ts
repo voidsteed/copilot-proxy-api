@@ -367,18 +367,17 @@ describe("CLI shares the native authority", () => {
       values: { ...values, shared: true },
       explicit: {},
     }
-    for (const run of [
+    const results = await Promise.allSettled([
       runStart(sharedStart),
       runAuth({ ...roots(), shared: true, verbose: false, showToken: false }),
-    ]) {
-      await run.then(
-        () => {
-          throw new Error("Expected native-storage rejection")
-        },
-        (error: unknown) => {
-          expect(error instanceof Error && error.message).toContain(expected)
-        },
-      )
+    ])
+    for (const result of results) {
+      expect(result.status).toBe("rejected")
+      if (result.status === "rejected") {
+        const message =
+          result.reason instanceof Error ? result.reason.message : ""
+        expect(message).toContain(expected)
+      }
     }
   })
 })

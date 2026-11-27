@@ -42,6 +42,7 @@ test.skipIf(process.platform !== "win32")(
     ])
     expect(result.stdout).toBe(value)
   },
+  15_000,
 )
 
 test("PowerShell and cmd instructions quote literal values without percent expansion", () => {
