@@ -61,6 +61,7 @@ await build({
     main: "main/index.ts",
     preload: "main/preload.ts",
     engine: "engine/index.ts",
+    bridge: "bridge/index.ts",
     preview: "testing/preview-entry.ts",
     "live-check": "testing/live-check.ts",
   },

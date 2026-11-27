@@ -1,4 +1,7 @@
-import type { NativeConnection } from "../../src/lib/proxy-contracts"
+import type {
+  ConfigurableAgent,
+  NativeConnection,
+} from "../../src/lib/proxy-contracts"
 import type {
   AgentConfigView,
   AgentTarget,
@@ -436,6 +439,98 @@ function httpSnippet(options: SnippetOptions): string {
     `  --data-raw ${quote(payload, shell)}`,
   )
   return lines.join(" \\\n")
+}
+
+export function createConfigFileSnippet(options: {
+  target: ConfigurableAgent
+  connection: NativeConnection
+  model: DesktopModel
+  modelId?: string
+}): string {
+  const { target, connection, model } = options
+  const selectedModelId = options.modelId ?? model.id
+  switch (target) {
+    case "claude-code": {
+      const token =
+        connection.authentication.kind === "keyed" ?
+          connection.authentication.key
+        : "dummy"
+      return JSON.stringify(
+        {
+          env: {
+            ANTHROPIC_BASE_URL: connection.rootUrl,
+            ANTHROPIC_MODEL: selectedModelId,
+            ANTHROPIC_AUTH_TOKEN: token,
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+            DISABLE_NON_ESSENTIAL_MODEL_CALLS: "1",
+          },
+        },
+        null,
+        2,
+      )
+    }
+    case "codex": {
+      const lines = [
+        `model = ${JSON.stringify(selectedModelId)}`,
+        'model_provider = "copilot_proxy"',
+        "",
+        "[model_providers.copilot_proxy]",
+        'name = "Copilot Proxy"',
+        `base_url = ${JSON.stringify(connection.apiUrl)}`,
+        'wire_api = "responses"',
+      ]
+      if (connection.authentication.kind === "keyed") {
+        lines.push(
+          `experimental_bearer_token = ${JSON.stringify(connection.authentication.key)}`,
+        )
+      }
+      return lines.join("\n")
+    }
+    case "opencode": {
+      const separator = selectedModelId.indexOf("/")
+      const provider =
+        separator > 0 ? selectedModelId.slice(0, separator) : "copilot_proxy"
+      const modelId =
+        separator > 0 ? selectedModelId.slice(separator + 1) : selectedModelId
+      return JSON.stringify(
+        {
+          $schema: "https://opencode.ai/config.json",
+          model: `${provider}/${modelId}`,
+          provider: {
+            [provider]: {
+              npm: "@ai-sdk/openai-compatible",
+              name: "Copilot Proxy",
+              options: {
+                baseURL: connection.apiUrl,
+                ...(connection.authentication.kind === "keyed" ?
+                  { apiKey: connection.authentication.key }
+                : {}),
+              },
+              models: {
+                [modelId]: {
+                  name: model.name || modelId,
+                  ...(model.contextWindow && model.maxOutput ?
+                    {
+                      limit: {
+                        context: model.contextWindow,
+                        output: model.maxOutput,
+                      },
+                    }
+                  : {}),
+                },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )
+    }
+    default: {
+      const exhaustive: never = target
+      return exhaustive
+    }
+  }
 }
 
 export function createConnectionSnippet(options: ConnectionOptions): string {

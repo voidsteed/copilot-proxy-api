@@ -34,8 +34,12 @@ async function clearSavedCredentials(filename: string): Promise<void> {
 export function createCredentialVault(options: {
   directory: string
   encryption: Encryption | null
+  filename?: string
 }): CredentialVault {
-  const filename = path.join(options.directory, "credentials.enc")
+  const name = options.filename ?? "credentials.enc"
+  if (!name || path.basename(name) !== name || name === "." || name === "..")
+    throw new Error("Credential vault filename must be a single file name.")
+  const filename = path.join(options.directory, name)
   const encryption = options.encryption
   if (!encryption) {
     let credentials: StoredCredentials | null = null

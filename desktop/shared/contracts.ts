@@ -250,6 +250,7 @@ export const commandSchema = z.discriminatedUnion("kind", [
       target: agentTargetSchema,
       modelId: z.string().min(1).max(1000),
       shell: z.enum(["posix", "powershell"]),
+      format: z.enum(["command", "config-file"]).optional(),
     })
     .strict(),
   z

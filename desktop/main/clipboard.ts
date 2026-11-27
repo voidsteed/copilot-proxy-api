@@ -1,11 +1,13 @@
 import type {
   AgentConfigView,
+  ConfigurableAgent,
   NativeConnection,
 } from "../../src/lib/proxy-contracts"
 import type { DesktopCommand, DesktopModel } from "../shared/contracts"
 
 import {
   AGENT_DETAILS,
+  createConfigFileSnippet,
   createConnectionSnippet,
   supportsAgent,
 } from "../shared/connections"
@@ -23,6 +25,50 @@ type ClipboardOptions = {
   agentConfigs: Array<AgentConfigView>
   deviceCode: string | null
   models: Array<DesktopModel>
+}
+
+function isConfigurableAgent(target: string): target is ConfigurableAgent {
+  return target === "claude-code" || target === "codex" || target === "opencode"
+}
+
+function renderAgentClipboardText(options: {
+  command: Extract<ClipboardCommand, { kind: "copy-config" }>
+  connection: NativeConnection
+  metadata: DesktopModel
+  configuredModel: { exact: string } | null
+  agentConfig: AgentConfigView | undefined
+}): ClipboardResult {
+  const { command, connection, metadata, configuredModel, agentConfig } =
+    options
+  if (command.format === "config-file" && isConfigurableAgent(command.target)) {
+    return {
+      kind: "text",
+      text: createConfigFileSnippet({
+        target: command.target,
+        connection,
+        model: metadata,
+        modelId: configuredModel?.exact ?? command.modelId,
+      }),
+    }
+  }
+  try {
+    return {
+      kind: "text",
+      text: createConnectionSnippet({
+        target: command.target,
+        connection,
+        model: metadata,
+        modelId: configuredModel?.exact,
+        agentConfig,
+        shell: command.shell,
+      }),
+    }
+  } catch {
+    return {
+      kind: "error",
+      message: "Review this agent's existing configuration before connecting.",
+    }
+  }
 }
 
 function configurationClipboard(
@@ -73,24 +119,13 @@ function configurationClipboard(
       message:
         "This model does not support this agent's API. Choose another model.",
     }
-  try {
-    return {
-      kind: "text",
-      text: createConnectionSnippet({
-        target: command.target,
-        connection,
-        model: metadata,
-        modelId: configuredModel?.exact,
-        agentConfig,
-        shell: command.shell,
-      }),
-    }
-  } catch {
-    return {
-      kind: "error",
-      message: "Review this agent's existing configuration before connecting.",
-    }
-  }
+  return renderAgentClipboardText({
+    command,
+    connection,
+    metadata,
+    configuredModel,
+    agentConfig,
+  })
 }
 
 export function createClipboardText(

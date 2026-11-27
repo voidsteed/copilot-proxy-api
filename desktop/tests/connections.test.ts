@@ -17,6 +17,7 @@ import {
 import {
   connectionOrigin,
   connectionUrlForAgent,
+  createConfigFileSnippet,
   createConnectionSnippet,
   createLaunchPreview,
   supportsAgent,
@@ -657,4 +658,64 @@ describe("Antigravity CLI support, preview redaction, and PowerShell quoting", (
     },
     20_000,
   )
+})
+
+describe("config file snippets", () => {
+  const keyed = nativeConnectionSchema.parse({
+    rootUrl: "http://127.0.0.1:4141",
+    apiUrl: "http://127.0.0.1:4141/v1",
+    authentication: { kind: "keyed", key: "secret-local-key" },
+  })
+  const sampleModel = {
+    id: "gpt-5.4",
+    name: "GPT-5.4",
+    vendor: "OpenAI",
+    contextWindow: 200_000,
+    maxOutput: 16_384,
+    supports: ["tools" as const, "streaming" as const],
+    endpoints: ["/chat/completions", "/responses"],
+    preview: false,
+  }
+
+  test("emits valid JSON and TOML config blocks with gateway key for file-configured agents", () => {
+    const claude = JSON.parse(
+      createConfigFileSnippet({
+        target: "claude-code",
+        connection: keyed,
+        model: sampleModel,
+      }),
+    ) as { env: Record<string, string> }
+    expect(claude.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:4141")
+    expect(claude.env.ANTHROPIC_AUTH_TOKEN).toBe("secret-local-key")
+    expect(claude.env.ANTHROPIC_MODEL).toBe("gpt-5.4")
+
+    const codex = createConfigFileSnippet({
+      target: "codex",
+      connection: keyed,
+      model: sampleModel,
+    })
+    expect(codex).toContain('model = "gpt-5.4"')
+    expect(codex).toContain("[model_providers.copilot_proxy]")
+    expect(codex).toContain('experimental_bearer_token = "secret-local-key"')
+
+    const opencode = JSON.parse(
+      createConfigFileSnippet({
+        target: "opencode",
+        connection: keyed,
+        model: sampleModel,
+      }),
+    ) as {
+      model: string
+      provider: {
+        copilot_proxy: { options: { baseURL: string; apiKey: string } }
+      }
+    }
+    expect(opencode.model).toBe("copilot_proxy/gpt-5.4")
+    expect(opencode.provider.copilot_proxy.options.baseURL).toBe(
+      "http://127.0.0.1:4141/v1",
+    )
+    expect(opencode.provider.copilot_proxy.options.apiKey).toBe(
+      "secret-local-key",
+    )
+  })
 })
