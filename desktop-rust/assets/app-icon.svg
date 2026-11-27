@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Clean, banding-free sculpted macOS obsidian gradient -->
+    <linearGradient id="bgGrad" x1="220" y1="96" x2="804" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#222733"/>
+      <stop offset="45%" stop-color="#141821"/>
+      <stop offset="100%" stop-color="#0B0E14"/>
+    </linearGradient>
+
+    <!-- Crisp subtle specular edge rim -->
+    <linearGradient id="rimGrad" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.20"/>
+      <stop offset="30%" stop-color="#CBD5E1" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.03"/>
+    </linearGradient>
+
+    <!-- Soft matte-luminous pearl silver arc gradient -->
+    <linearGradient id="arcTop" x1="290" y1="280" x2="620" y2="550" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="65%" stop-color="#E5EBF5"/>
+      <stop offset="100%" stop-color="#BDC9DC"/>
+    </linearGradient>
+
+    <linearGradient id="arcBottom" x1="404" y1="474" x2="734" y2="744" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#EAEFF7"/>
+      <stop offset="55%" stop-color="#D1DBEA"/>
+      <stop offset="100%" stop-color="#A4B4CC"/>
+    </linearGradient>
+
+    <!-- Modern matte-luminous sapphire core (clean studio gradient, no retro Aqua dot) -->
+    <linearGradient id="orbGrad" x1="450" y1="426" x2="574" y2="598" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#60A5FA"/>
+      <stop offset="48%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#1D4ED8"/>
+    </linearGradient>
+
+    <!-- Soft architectural top rim on core orb -->
+    <linearGradient id="orbRim" x1="512" y1="432" x2="512" y2="592" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.45"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#93C5FD" stop-opacity="0.12"/>
+    </linearGradient>
+
+    <!-- Soft elevation shadow under squircle -->
+    <filter id="squircleShadow" x="0%" y="0%" width="100%" height="100%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.34"/>
+    </filter>
+
+    <!-- Soft cobalt glow + subtle elevation behind emblem -->
+    <filter id="orbGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="0" stdDeviation="28" flood-color="#3B82F6" flood-opacity="0.48"/>
+    </filter>
+
+    <filter id="arcShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000000" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+
+  <!-- Apple HIG proportioned squircle (824x824 centered inside 1024x1024) -->
+  <g filter="url(#squircleShadow)">
+    <rect x="100" y="100" width="824" height="824" rx="186" ry="186" fill="url(#bgGrad)"/>
+    <rect x="102" y="102" width="820" height="820" rx="184" ry="184" fill="none" stroke="url(#rimGrad)" stroke-width="3.5"/>
+  </g>
+
+  <!-- Subtle architectural concentric guide ring -->
+  <circle cx="512" cy="512" r="228" fill="none" stroke="#FFFFFF" stroke-opacity="0.055" stroke-width="2.5"/>
+
+  <!-- Precision Relay Aperture Arcs -->
+  <g filter="url(#arcShadow)">
+    <path
+      d="M 301.0 600.4 A 228 228 0 0 1 600.4 301.0"
+      fill="none"
+      stroke="url(#arcTop)"
+      stroke-width="58"
+      stroke-linecap="round"
+    />
+    <path
+      d="M 723.0 423.6 A 228 228 0 0 1 423.6 723.0"
+      fill="none"
+      stroke="url(#arcBottom)"
+      stroke-width="58"
+      stroke-linecap="round"
+    />
+  </g>
+
+  <!-- Luminous Sapphire Relay Core -->
+  <circle cx="512" cy="512" r="110" fill="none" stroke="#60A5FA" stroke-opacity="0.18" stroke-width="3.5"/>
+  <g filter="url(#orbGlow)">
+    <circle cx="512" cy="512" r="78" fill="url(#orbGrad)"/>
+    <circle cx="512" cy="512" r="76.5" fill="none" stroke="url(#orbRim)" stroke-width="3"/>
+  </g>
+</svg>

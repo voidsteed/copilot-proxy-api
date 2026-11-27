@@ -17,4 +17,6 @@ dist/
 /desktop/node_modules
 /desktop/dist
 /desktop/release
+/desktop-rust/target
+/desktop-rust/assets/generated
 .gstack/
