@@ -656,6 +656,7 @@ function proposalAllowed(options: ConfigureMissingAgentOptions): boolean {
 async function configureLocked(
   options: ConfigureMissingAgentOptions,
   lockPath: string,
+  hooks?: { beforeCommit?: () => Promise<void> | void },
 ): Promise<ConfigureResult> {
   const read = await readAgentConfig(options.target, options.homeDirectory)
   const proposal = options.proposal?.catalogId ?? null
@@ -696,6 +697,7 @@ async function configureLocked(
     additions: plan.additions,
     target: options.target,
     homeDirectory: options.homeDirectory,
+    beforeCommit: hooks?.beforeCommit,
   })
   if (written.kind === "invalid") return { ...written, view: plan.view }
   const current = await readAgentConfig(options.target, options.homeDirectory)
@@ -725,6 +727,7 @@ async function configureLocked(
 
 export async function configureMissingAgent(
   options: ConfigureMissingAgentOptions,
+  hooks?: { beforeCommit?: () => Promise<void> | void },
 ): Promise<ConfigureResult> {
   const initial = await readAgentConfig(options.target, options.homeDirectory)
   if (initial.kind === "invalid") {
@@ -738,6 +741,6 @@ export async function configureMissingAgent(
     return { kind: "invalid", message: initial.message, view }
   }
   return withConfigWriter(initial.file.resolvedPath, () =>
-    configureLocked(options, initial.file.resolvedPath),
+    configureLocked(options, initial.file.resolvedPath, hooks),
   )
 }

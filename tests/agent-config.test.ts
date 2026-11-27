@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { parse as parseJsonc } from "jsonc-parser"
-import { spawn } from "node:child_process"
-import { once } from "node:events"
 import {
   chmod,
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   readlink,
   rm,
@@ -500,36 +499,30 @@ describe("configuration refusal", () => {
   })
 
   test("refuses an observed edit made while the configuration addition is being prepared", async () => {
-    const path = await seed(
-      "codex",
-      `# Initial configuration. ${"x".repeat(256_000)}\n`,
-    )
+    const path = await seed("codex", "# Initial configuration.\n")
     const edited = '# User edit during Configure.\nmodel = "operator-model"\n'
-    const source = `
-      const { readdirSync, writeFileSync } = require("node:fs");
-      process.stdout.write("ready\\n");
-      const deadline = Date.now() + 5000;
-      while (Date.now() < deadline) {
-        if (readdirSync(${JSON.stringify(dirname(path))}).some(name => name !== "config.toml")) {
-          writeFileSync(${JSON.stringify(path)}, ${JSON.stringify(edited)});
-          process.exit(0);
-        }
-      }
-      process.exit(2);
-    `
-    const editor = spawn(process.execPath, ["-e", source], {
-      stdio: ["ignore", "pipe", "pipe"],
-    })
-    const exit = once(editor, "exit")
-    try {
-      await once(editor.stdout, "data")
-      const result = await configure("codex")
-      expect((await exit)[0]).toBe(0)
-      expect(result.kind).toBe("conflict")
-      expect(await readFile(path, "utf8")).toBe(edited)
-    } finally {
-      if (editor.exitCode === null) editor.kill()
-    }
+    let sawTempFile = false
+    const result = await configureMissingAgent(
+      {
+        homeDirectory,
+        target: "codex",
+        connection,
+        catalog,
+        proposal: { kind: "proposed", catalogId: "gpt-6.1-sol" },
+      },
+      {
+        beforeCommit: async () => {
+          sawTempFile = (await readdir(dirname(path))).some(
+            (name) => name !== "config.toml",
+          )
+          await writeFile(path, edited)
+        },
+      },
+    )
+    expect(sawTempFile).toBe(true)
+    expect(result.kind).toBe("conflict")
+    expect(await readFile(path, "utf8")).toBe(edited)
+    expect(await readdir(dirname(path))).toEqual(["config.toml"])
   })
 
   test("requires an agent model choice before creating a missing configuration", async () => {

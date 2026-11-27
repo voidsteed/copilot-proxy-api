@@ -749,9 +749,11 @@ async function commitAddition({
   text,
   target,
   homeDirectory,
+  beforeCommit,
 }: {
   file: ConfigFile
   text: string
+  beforeCommit?: () => Promise<void> | void
 } & Pick<ConfigureMissingAgentOptions, "target" | "homeDirectory">): Promise<
   "written" | "changed"
 > {
@@ -776,6 +778,7 @@ async function commitAddition({
     } finally {
       await handle.close()
     }
+    await beforeCommit?.()
     if (!samePreimage(file, await readAgentConfig(target, homeDirectory)))
       return "changed"
     if (file.disk.kind === "missing")
@@ -791,6 +794,7 @@ export async function writeConfigAdditions(
   options: {
     file: ConfigFile
     additions: Array<Addition>
+    beforeCommit?: () => Promise<void> | void
   } & Pick<ConfigureMissingAgentOptions, "target" | "homeDirectory">,
 ): Promise<
   { kind: "written" | "changed" } | { kind: "invalid"; message: string }
@@ -803,6 +807,7 @@ export async function writeConfigAdditions(
         text: text,
         target: options.target,
         homeDirectory: options.homeDirectory,
+        beforeCommit: options.beforeCommit,
       }),
     }
   } catch (error) {
