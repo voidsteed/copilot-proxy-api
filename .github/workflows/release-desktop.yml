@@ -5,11 +5,6 @@ on:
     paths:
       - .github/workflows/release-desktop.yml
       - desktop-rust/**
-      - desktop/bridge/**
-      - desktop/main/clipboard.ts
-      - desktop/main/vault.ts
-      - desktop/shared/**
-      - desktop/scripts/build.mjs
   push:
     tags:
       - "desktop-v*"
@@ -61,7 +56,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           CLI_VERSION="$(node -p "require('./package.json').version")"
-          DEFAULT_DESKTOP="$(node -p "require('./desktop/package.json').version")"
+          DEFAULT_DESKTOP="$(node -p "require('./desktop-rust/bridge/package.json').version")"
           TAG_NAME=""
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${INPUT_TAG}" ]; then
             if [[ "${INPUT_TAG}" == desktop-v* ]]; then
@@ -80,10 +75,10 @@ jobs:
           echo "desktop_tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
           echo "desktop_version=${DESKTOP_VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Install root and desktop dependencies
+      - name: Install root and desktop bridge dependencies
         run: |
           bun install --frozen-lockfile --ignore-scripts
-          bun install --cwd desktop --frozen-lockfile --ignore-scripts
+          bun install --cwd desktop-rust/bridge --frozen-lockfile --ignore-scripts
 
       - name: Run Rust unit tests
         working-directory: desktop-rust

@@ -49,10 +49,10 @@ mkdir -p "$APP_OUT/Contents/MacOS" "$APP_OUT/Contents/Resources/bridge/node_modu
 cp "$CARGO_TARGET_DIR/release/copilot-proxy-desktop" "$APP_OUT/Contents/MacOS/copilot-proxy-desktop"
 chmod +x "$APP_OUT/Contents/MacOS/copilot-proxy-desktop"
 cp "$RUST_DIR/assets/generated/AppIcon.icns" "$APP_OUT/Contents/Resources/AppIcon.icns"
-cp "$REPO_ROOT/desktop/dist/bridge.cjs" "$APP_OUT/Contents/Resources/bridge/bridge.cjs"
-cp "$REPO_ROOT/desktop/dist/engine.cjs" "$APP_OUT/Contents/Resources/bridge/engine.cjs"
+cp "$RUST_DIR/bridge/dist/bridge.cjs" "$APP_OUT/Contents/Resources/bridge/bridge.cjs"
+cp "$RUST_DIR/bridge/dist/engine.cjs" "$APP_OUT/Contents/Resources/bridge/engine.cjs"
 
-NODE_MODS_SRC="$(realpath "$REPO_ROOT/desktop/node_modules")"
+NODE_MODS_SRC="$(realpath "$RUST_DIR/bridge/node_modules")"
 for pkg in pdf-parse jsonc-parser pdfjs-dist @napi-rs; do
   if [ -e "$NODE_MODS_SRC/$pkg" ]; then
     cp -RL "$NODE_MODS_SRC/$pkg" "$APP_OUT/Contents/Resources/bridge/node_modules/$pkg"

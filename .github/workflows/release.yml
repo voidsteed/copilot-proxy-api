@@ -32,7 +32,7 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           CLI_VERSION="${TAG_NAME#v}"
-          DESKTOP_VERSION="$(bun -e 'console.log(JSON.parse(await Bun.file("desktop/package.json").text()).version)')"
+          DESKTOP_VERSION="$(bun -e 'console.log(JSON.parse(await Bun.file("desktop-rust/bridge/package.json").text()).version)')"
           DESKTOP_TAG="desktop-v${DESKTOP_VERSION}"
           EXISTING="$(gh release view "${TAG_NAME}" --json body --jq '.body' 2>/dev/null || true)"
           cat > release-notes.md <<EOF

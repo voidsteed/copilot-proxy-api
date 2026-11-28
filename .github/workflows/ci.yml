@@ -23,8 +23,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile --ignore-scripts
 
-      - name: Install desktop type dependencies
-        run: bun install --cwd desktop --frozen-lockfile --ignore-scripts
+      - name: Install desktop bridge type dependencies
+        run: bun install --cwd desktop-rust/bridge --frozen-lockfile --ignore-scripts
 
       - name: Run linter
         run: bun run lint:all

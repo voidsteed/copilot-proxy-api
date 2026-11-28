@@ -6,7 +6,12 @@ export default [
     // them and lints a second copy of every file — including build output —
     // under a path that none of this config's globs match. Each worktree lints
     // itself with its own checkout of this file.
-    ignores: [".claude/worktrees/**"],
+    ignores: [
+      ".claude/worktrees/**",
+      "desktop-rust/target/**",
+      "desktop-rust/bridge/dist/**",
+      "desktop-rust/bridge/node_modules/**",
+    ],
   },
 
   ...config({
@@ -14,29 +19,4 @@ export default [
       plugins: ["prettier-plugin-packagejson"],
     },
   }),
-
-  {
-    files: ["desktop/renderer/**/*.tsx"],
-    rules: {
-      "max-lines-per-function": [
-        "error",
-        { max: 300, skipBlankLines: true, skipComments: true },
-      ],
-      complexity: "off",
-    },
-  },
-
-  {
-    files: [
-      "desktop/main/index.ts",
-      "desktop/testing/preview-entry.ts",
-      "desktop/testing/live-check.ts",
-    ],
-    rules: { "unicorn/prefer-module": "off" },
-  },
-
-  {
-    files: ["desktop/main/smoke.ts"],
-    rules: { "max-lines-per-function": "off" },
-  },
 ]

@@ -104,15 +104,13 @@ pub fn resolve_bridge_scripts() -> (PathBuf, PathBuf) {
         }
     }
 
-    // Development layout relative to repo worktree
+    // Development layout relative to desktop-rust/
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if let Some(repo_root) = manifest_dir.parent() {
-        let dev = repo_root.join("desktop/dist");
-        let bridge = dev.join("bridge.cjs");
-        let engine = dev.join("engine.cjs");
-        if bridge.is_file() && engine.is_file() {
-            return (bridge, engine);
-        }
+    let dev = manifest_dir.join("bridge/dist");
+    let bridge = dev.join("bridge.cjs");
+    let engine = dev.join("engine.cjs");
+    if bridge.is_file() && engine.is_file() {
+        return (bridge, engine);
     }
 
     (PathBuf::from("bridge.cjs"), PathBuf::from("engine.cjs"))
