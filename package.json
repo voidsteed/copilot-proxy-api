@@ -40,6 +40,7 @@
     "knip": "knip-bun",
     "lint": "eslint --cache --cache-location node_modules/.cache/eslint/",
     "lint:all": "eslint --cache --cache-location node_modules/.cache/eslint/ .",
+    "lint:cli": "eslint --cache --cache-location node_modules/.cache/eslint/ src tests scripts package.json",
     "prepack": "bun run build",
     "prepare": "bunx simple-git-hooks",
     "release": "bun run verify && bumpp && bun publish --access public",
@@ -47,7 +48,7 @@
     "test": "bun test ./tests",
     "test:codex": "bun run scripts/codex-smoke.ts",
     "typecheck": "tsc",
-    "verify": "bun run typecheck && bun run lint && bun run test"
+    "verify": "bun run typecheck && bun run lint:cli && bun run test"
   },
   "simple-git-hooks": {
     "pre-commit": "bunx lint-staged"

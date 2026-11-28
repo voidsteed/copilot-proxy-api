@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish (leave empty for dry-run artifact upload only)"
+        description: "Desktop release tag (for example desktop-v0.0.10; leave empty for dry-run artifact upload only)"
         required: false
         default: ""
 
@@ -32,6 +32,10 @@ jobs:
     name: Rust desktop macOS (arm64)
     runs-on: macos-15
     timeout-minutes: 30
+    outputs:
+      cli_version: ${{ steps.versions.outputs.cli_version }}
+      desktop_tag: ${{ steps.versions.outputs.desktop_tag }}
+      desktop_version: ${{ steps.versions.outputs.desktop_version }}
     permissions:
       contents: read
     steps:
@@ -51,6 +55,31 @@ jobs:
         with:
           workspaces: desktop-rust
 
+      - name: Resolve package and release versions
+        id: versions
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          CLI_VERSION="$(node -p "require('./package.json').version")"
+          DEFAULT_DESKTOP="$(node -p "require('./desktop/package.json').version")"
+          TAG_NAME=""
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${INPUT_TAG}" ]; then
+            if [[ "${INPUT_TAG}" == desktop-v* ]]; then
+              TAG_NAME="${INPUT_TAG}"
+            else
+              TAG_NAME="desktop-v${INPUT_TAG#v}"
+            fi
+          elif [[ "${GITHUB_REF_NAME}" == desktop-v* ]]; then
+            TAG_NAME="${GITHUB_REF_NAME}"
+          fi
+          DESKTOP_VERSION="${DEFAULT_DESKTOP}"
+          if [ -n "${TAG_NAME}" ]; then
+            DESKTOP_VERSION="${TAG_NAME#desktop-v}"
+          fi
+          echo "cli_version=${CLI_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "desktop_tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "desktop_version=${DESKTOP_VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Install root and desktop dependencies
         run: |
           bun install --frozen-lockfile --ignore-scripts
@@ -64,16 +93,8 @@ jobs:
         env:
           COPILOT_PROXY_PACKAGE_OUTPUT: ${{ runner.temp }}/copilot-proxy-rust-package
           CARGO_TARGET_DIR: ${{ github.workspace }}/desktop-rust/target
-          INPUT_TAG: ${{ inputs.tag }}
-        run: |
-          TAG_NAME="${GITHUB_REF_NAME}"
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${INPUT_TAG}" ]; then
-            TAG_NAME="${INPUT_TAG}"
-          fi
-          if [[ "$TAG_NAME" == desktop-v* ]]; then
-            export COPILOT_PROXY_DESKTOP_VERSION="${TAG_NAME#desktop-v}"
-          fi
-          ./desktop-rust/scripts/package-mac.sh
+          COPILOT_PROXY_DESKTOP_VERSION: ${{ steps.versions.outputs.desktop_version }}
+        run: ./desktop-rust/scripts/package-mac.sh
 
       - name: Upload macOS release artifacts
         uses: actions/upload-artifact@v4
@@ -99,17 +120,44 @@ jobs:
       - name: Publish GitHub Release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INPUT_TAG: ${{ inputs.tag }}
           GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ needs.test-and-package-macos.outputs.desktop_tag }}
+          DESKTOP_VERSION: ${{ needs.test-and-package-macos.outputs.desktop_version }}
+          CLI_VERSION: ${{ needs.test-and-package-macos.outputs.cli_version }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
-          TAG_NAME="${GITHUB_REF_NAME}"
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            TAG_NAME="${INPUT_TAG}"
-          fi
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" release-artifacts/* --clobber
+          GENERATED="$(gh api "repos/${GH_REPO}/releases/generate-notes" \
+            -f tag_name="${TAG_NAME}" \
+            -f target_commitish="${TARGET_SHA}" \
+            --jq '.body' 2>/dev/null || true)"
+          cat > release-notes.md <<EOF
+          ## Latest Packages
+
+          ### Desktop App (macOS Apple Silicon)
+          - **Release:** \`${TAG_NAME}\`
+          - **Downloads:** \`Copilot-Proxy-${DESKTOP_VERSION}-macos-arm64.dmg\`, \`Copilot-Proxy-${DESKTOP_VERSION}-macos-arm64.zip\`, and \`SHA256SUMS.txt\` (attached below)
+          - **First launch (ad-hoc signed):**
+            \`\`\`sh
+            xattr -dr com.apple.quarantine "/Applications/Copilot Proxy.app"
+            \`\`\`
+
+          ### CLI (npm)
+          - **Package:** [\`copilot-proxy-api@${CLI_VERSION}\`](https://www.npmjs.com/package/copilot-proxy-api) ([release \`v${CLI_VERSION}\`](https://github.com/${GH_REPO}/releases/tag/v${CLI_VERSION}))
+          - **Quick start:**
+            \`\`\`sh
+            npx copilot-proxy-api@latest start
+            \`\`\`
+
+          ${GENERATED}
+          EOF
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release edit "${TAG_NAME}" \
+              --title "Copilot Proxy Desktop ${DESKTOP_VERSION} + CLI v${CLI_VERSION}" \
+              --notes-file release-notes.md
+            gh release upload "${TAG_NAME}" release-artifacts/* --clobber
           else
-            gh release create "$TAG_NAME" release-artifacts/* \
-              --title "Copilot Proxy Desktop ${TAG_NAME#desktop-v}" \
-              --generate-notes
+            gh release create "${TAG_NAME}" release-artifacts/* \
+              --target "${TARGET_SHA}" \
+              --title "Copilot Proxy Desktop ${DESKTOP_VERSION} + CLI v${CLI_VERSION}" \
+              --notes-file release-notes.md
           fi

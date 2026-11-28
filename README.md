@@ -17,6 +17,11 @@ npx copilot-proxy-api@latest start --claude-code
 
 Complete the GitHub sign-in, choose your models, then paste the generated Claude Code command into a new terminal.
 
+**Latest releases:**
+
+- **npm CLI (`v0.10.35`):** [`copilot-proxy-api@0.10.35` on npm](https://www.npmjs.com/package/copilot-proxy-api) · [CLI release `v0.10.35`](https://github.com/voidsteed/copilot-proxy-api/releases/tag/v0.10.35) · run `npx copilot-proxy-api@latest start`
+- **Desktop App (`desktop-v0.0.9`, macOS Apple Silicon):** [Download DMG](https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.9/Copilot-Proxy-0.0.9-macos-arm64.dmg) · [Download ZIP](https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.9/Copilot-Proxy-0.0.9-macos-arm64.zip) · [Release notes and `SHA256SUMS.txt`](https://github.com/voidsteed/copilot-proxy-api/releases/tag/desktop-v0.0.9)
+
 **Client guides:** [Desktop App (macOS)](#desktop-app-macos) · [Claude Code](#using-with-claude-code) · [Codex CLI](#using-with-codex-cli) · [Antigravity CLI (agy)](#using-with-antigravity-cli-agy) · [Generic OpenAI, Anthropic, and Gemini clients](#api-endpoints)
 
 ## Desktop App (macOS)
@@ -27,6 +32,7 @@ Copilot Proxy Desktop is a native Rust (`iced`) menu bar app for Apple Silicon M
   - [Download `Copilot-Proxy-0.0.9-macos-arm64.dmg`](https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.9/Copilot-Proxy-0.0.9-macos-arm64.dmg)
   - [Download `Copilot-Proxy-0.0.9-macos-arm64.zip`](https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.9/Copilot-Proxy-0.0.9-macos-arm64.zip)
   - [Release notes and `SHA256SUMS.txt`](https://github.com/voidsteed/copilot-proxy-api/releases/tag/desktop-v0.0.9)
+- **CLI package (npm):** `bun run release` publishes only the npm package (`copilot-proxy-api`). Desktop app releases are built and published through the `Desktop Rust Release` GitHub workflow.
 
 ### Install on macOS
 

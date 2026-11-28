@@ -24,3 +24,35 @@ jobs:
       - run: bunx changelogithub
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+
+      - name: Include npm and Desktop release info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          CLI_VERSION="${TAG_NAME#v}"
+          DESKTOP_VERSION="$(bun -e 'console.log(JSON.parse(await Bun.file("desktop/package.json").text()).version)')"
+          DESKTOP_TAG="desktop-v${DESKTOP_VERSION}"
+          EXISTING="$(gh release view "${TAG_NAME}" --json body --jq '.body' 2>/dev/null || true)"
+          cat > release-notes.md <<EOF
+          ## Latest Packages
+
+          ### CLI (npm)
+          - **Package:** [\`copilot-proxy-api@${CLI_VERSION}\`](https://www.npmjs.com/package/copilot-proxy-api)
+          - **Quick start:**
+            \`\`\`sh
+            npx copilot-proxy-api@${CLI_VERSION} start
+            \`\`\`
+
+          ### Desktop App (macOS Apple Silicon)
+          - **Latest macOS release:** [\`${DESKTOP_TAG}\`](https://github.com/${GH_REPO}/releases/tag/${DESKTOP_TAG})
+          - **Downloads:** [DMG (arm64)](https://github.com/${GH_REPO}/releases/download/${DESKTOP_TAG}/Copilot-Proxy-${DESKTOP_VERSION}-macos-arm64.dmg) · [ZIP (arm64)](https://github.com/${GH_REPO}/releases/download/${DESKTOP_TAG}/Copilot-Proxy-${DESKTOP_VERSION}-macos-arm64.zip) · [SHA256SUMS.txt](https://github.com/${GH_REPO}/releases/download/${DESKTOP_TAG}/SHA256SUMS.txt)
+
+          ${EXISTING}
+          EOF
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release edit "${TAG_NAME}" --notes-file release-notes.md
+          else
+            gh release create "${TAG_NAME}" --title "${TAG_NAME}" --notes-file release-notes.md
+          fi

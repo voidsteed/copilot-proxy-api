@@ -75,7 +75,15 @@ PDF text extraction (`application/pdf`). Requests for
 Copilot's catalog. Server-side Gemini tools (`googleSearch`, `urlContext`,
 `codeExecution`) are rejected with HTTP 400.
 
-## Desktop app (macOS)
+## Releases (npm CLI and macOS Desktop)
+
+### CLI package (npm)
+
+- Latest npm package: `copilot-proxy-api@0.10.35` (https://www.npmjs.com/package/copilot-proxy-api)
+- GitHub CLI release: https://github.com/voidsteed/copilot-proxy-api/releases/tag/v0.10.35
+- Quick start: `npx copilot-proxy-api@latest start` (runs standalone by default; pass `--shared` to attach to the desktop gateway).
+
+### Desktop app (macOS)
 
 Copilot Proxy Desktop (`desktop-v0.0.9`) is a native Rust (`iced`) menu bar app for Apple Silicon Macs that replaces Electron while reusing the local TypeScript proxy engine.
 
@@ -83,7 +91,7 @@ Copilot Proxy Desktop (`desktop-v0.0.9`) is a native Rust (`iced`) menu bar app 
 - Apple Silicon DMG: https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.9/Copilot-Proxy-0.0.9-macos-arm64.dmg
 - Apple Silicon ZIP: https://github.com/voidsteed/copilot-proxy-api/releases/download/desktop-v0.0.9/Copilot-Proxy-0.0.9-macos-arm64.zip
 - Requires Node.js 24+ for the local proxy bridge. Because the release is ad-hoc signed, run `xattr -dr com.apple.quarantine "/Applications/Copilot Proxy.app"` before first launch.
-- Provides copyable config snippets and duplicate-safe config merging for Claude Code, Codex CLI, and OpenCode, plus read-only diagnostics and session commands for Antigravity CLI (`agy`).
+- Provides anytime local port switching in Settings (coexisting cleanly with a Terminal CLI on port 4141), copyable config snippets, and duplicate-safe config merging for Claude Code, Codex CLI, and OpenCode, plus read-only diagnostics and session commands for Antigravity CLI (`agy`).
 
 ## Links
 

@@ -278,18 +278,17 @@
         aria-labelledby="desktop-app-title"
       >
         <div class="section-heading">
-          <h2 id="desktop-app-title">Native macOS desktop app.</h2>
+          <h2 id="desktop-app-title">Desktop app and npm CLI.</h2>
           <p>
-            Manage your local gateway, inspect Copilot quota and request
-            activity, and configure Claude Code, Codex CLI, OpenCode, and
-            Antigravity CLI from a lightweight Rust menu bar app.
+            Install the native Rust menu bar app on Apple Silicon Macs, or run
+            the standalone npm CLI directly on macOS, Linux, and Windows.
           </p>
         </div>
 
-        <div class="quick-start-grid">
+        <div class="releases-grid">
           <div class="code-panel">
             <div class="code-panel-bar">
-              <span>macOS Apple Silicon · desktop-v0.0.9</span>
+              <span>macOS Desktop App · desktop-v0.0.9 (arm64)</span>
               <button
                 class="copy-button"
                 type="button"
@@ -322,35 +321,78 @@
             <pre><code id="desktop-install-command">xattr -dr com.apple.quarantine "/Applications/Copilot Proxy.app"</code></pre>
             <p class="code-note">
               Built with Rust (<code>iced</code>) instead of Electron. Requires
-              Node.js 24+ for the local proxy bridge. The build is ad-hoc
-              signed, so run the command above once after moving the app to
-              Applications.
+              Node.js 24+ for the local proxy bridge. Run the command above once
+              after moving the ad-hoc signed app to Applications.
             </p>
           </div>
 
-          <div class="setup-path">
-            <article>
-              <h3>Minimal footprint</h3>
-              <p>
-                Closing the window frees UI memory while keeping the Retina menu
-                bar tray active at 0% idle CPU.
-              </p>
-            </article>
-            <article>
-              <h3>Safe agent setup</h3>
-              <p>
-                Preview and copy exact JSON or TOML config snippets, or add
-                missing keys with duplicate and conflict checks.
-              </p>
-            </article>
-            <article>
-              <h3>macOS Keychain storage</h3>
-              <p>
-                Encrypts saved credentials locally with macOS Keychain and
-                coexists cleanly with a running CLI proxy on port 4141.
-              </p>
-            </article>
+          <div class="code-panel">
+            <div class="code-panel-bar">
+              <span>npm CLI Package · v0.10.35</span>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy-target="npm-install-command"
+                data-copy-status="desktop-copy-status"
+                data-copy-label="CLI start command copied to your clipboard."
+              >
+                Copy
+              </button>
+            </div>
+            <div class="hero-actions" style="padding: 18px 20px 6px">
+              <a
+                class="button button-primary"
+                href="https://www.npmjs.com/package/copilot-proxy-api"
+                target="_blank"
+                rel="noopener noreferrer"
+                >View on npm (0.10.35)</a
+              >
+              <a
+                class="button button-secondary"
+                href="https://github.com/voidsteed/copilot-proxy-api/releases/tag/v0.10.35"
+                target="_blank"
+                rel="noopener noreferrer"
+                >CLI Release v0.10.35</a
+              >
+              <a
+                class="button button-ghost"
+                href="https://github.com/voidsteed/copilot-proxy-api/releases"
+                target="_blank"
+                rel="noopener noreferrer"
+                >All Releases</a
+              >
+            </div>
+            <pre><code id="npm-install-command">npx copilot-proxy-api@latest start</code></pre>
+            <p class="code-note">
+              Standalone CLI for macOS, Linux, and Windows. Starts directly on
+              port 4141 without attaching to the desktop app unless
+              <code>--shared</code> is passed.
+            </p>
           </div>
+        </div>
+
+        <div class="release-highlights">
+          <article>
+            <h3>Minimal footprint</h3>
+            <p>
+              Closing the desktop window frees UI memory while keeping the
+              Retina menu bar tray active at 0% idle CPU.
+            </p>
+          </article>
+          <article>
+            <h3>Independent ports</h3>
+            <p>
+              Switch Desktop to any local port in Settings anytime while keeping
+              a standalone Terminal CLI running on port 4141.
+            </p>
+          </article>
+          <article>
+            <h3>Safe agent setup</h3>
+            <p>
+              Preview and copy exact JSON or TOML config snippets, or merge
+              missing keys with duplicate and conflict checks.
+            </p>
+          </article>
         </div>
         <p
           class="copy-status"

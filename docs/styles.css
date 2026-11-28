@@ -365,6 +365,35 @@ button,
   gap: clamp(36px, 7vw, 94px);
 }
 
+.releases-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: clamp(24px, 3vw, 36px);
+}
+
+.release-highlights {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(20px, 3vw, 36px);
+  margin-top: 36px;
+  padding-top: 28px;
+  border-top: 1px solid var(--line);
+}
+
+.release-highlights h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 760;
+}
+
+.release-highlights p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.94rem;
+}
+
 .code-panel {
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -706,7 +735,9 @@ button,
     border-right: 1px solid var(--line);
   }
 
-  .quick-start-grid {
+  .quick-start-grid,
+  .releases-grid,
+  .release-highlights {
     grid-template-columns: 1fr;
   }
 

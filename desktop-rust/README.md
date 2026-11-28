@@ -32,4 +32,11 @@ Package `Copilot Proxy.app`, `.dmg`, `.zip`, and `SHA256SUMS.txt`:
 
 ## Releases
 
-Tag a release with `desktop-v<version>` (for example `desktop-v0.0.9`) or trigger `.github/workflows/release-desktop.yml` via `workflow_dispatch`.
+`bun run release` in the repository root publishes only the npm CLI package (`copilot-proxy-api`) and tags `v<version>`.
+
+Desktop app releases are handled entirely by `.github/workflows/release-desktop.yml`:
+
+- Run **Actions -> Desktop Rust Release -> Run workflow** in GitHub and enter a tag such as `desktop-v0.0.10` (leave empty for a dry-run build artifact without creating a release).
+- Or push a `desktop-v<version>` tag (for example `desktop-v0.0.9`).
+
+Both the `Release` (`v*`) and `Desktop Rust Release` (`desktop-v*`) workflows include both npm CLI and macOS Desktop download information in the GitHub Release notes.
